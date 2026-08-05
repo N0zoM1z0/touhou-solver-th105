@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import time
-import math
 import copy
+import math
+import time
+import uuid
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
@@ -27,6 +28,7 @@ from .knowledge import (
 from .policy_api import PolicyObservation
 from .policy_loader import HotReloadPolicy
 from .telemetry import BoundedJsonlWriter
+from .transitions import OptionTransitionRecorder
 from .human_learning import compile_human_file, compiled_demonstrations_for
 from .win32 import ProcessReader
 
@@ -438,6 +440,8 @@ def run_adaptive_fight(
     telemetry_path: Path | None = None,
     difficulty: str = "unknown",
     terminal_tracker: TerminalRoundTracker | None = None,
+    session_id: str | None = None,
+    game_build_sha256: str | None = None,
 ) -> dict[str, int | float | str | object]:
     """Sense/actuate shell around a fail-safe hot-reloadable combat policy."""
     if seconds <= 0 or frame_hz <= 0:
@@ -512,7 +516,24 @@ def run_adaptive_fight(
             base_opponent_key,
         )
 
-    telemetry = BoundedJsonlWriter(telemetry_path) if telemetry_path is not None else None
+    telemetry = (
+        BoundedJsonlWriter(telemetry_path)
+        if telemetry_path is not None else None
+    )
+    transition_recorder = (
+        OptionTransitionRecorder(
+            BoundedJsonlWriter(
+                telemetry_path.with_name("th105_transitions.jsonl"),
+                rotate_bytes=16 * 1024 * 1024,
+                backups=8,
+            ),
+            session_id=session_id or uuid.uuid4().hex,
+            opponent=opponent_key,
+            difficulty=difficulty,
+            game_build_sha256=game_build_sha256,
+        )
+        if telemetry_path is not None else None
+    )
 
     def compact_plugin_status(status: dict[str, object]) -> dict[str, object]:
         metrics = status.get("metrics", {})
@@ -597,6 +618,9 @@ def run_adaptive_fight(
             "frame_hz": frame_hz,
             "difficulty": difficulty,
             "opponent": opponent_key,
+            "session_id": (
+                transition_recorder.session_id if transition_recorder else None
+            ),
         },
     )
 
@@ -624,6 +648,12 @@ def run_adaptive_fight(
                     me_hp=me.hp, enemy_hp=enemy.hp
                 )
                 if terminal_sequence is not None:
+                    if transition_recorder is not None:
+                        transition_recorder.finish_terminal(
+                            frame=frames,
+                            state=state,
+                            won=won,
+                        )
                     plugin.observe_terminal(
                         {
                             "frame": frames,
@@ -721,6 +751,16 @@ def run_adaptive_fight(
                 )
             )
             decision_frames += 1
+            if transition_recorder is not None:
+                transition_recorder.observe(
+                    frame=frames,
+                    state=state,
+                    decision=decision,
+                    enemy_projectiles=last_enemy_projectiles,
+                    own_projectiles=last_own_projectiles,
+                    policy_generation=plugin.generation,
+                    policy_sha256=plugin.digest,
+                )
             last_intent = decision.intent
             if "guard" in decision.intent:
                 guard_frames += 1
@@ -774,6 +814,11 @@ def run_adaptive_fight(
             next_tick = time.perf_counter()
 
     keyboard.set_chord(set())
+    if transition_recorder is not None:
+        transition_recorder.finish_truncated(
+            frame=frames,
+            state=state if scene_id(reader) == SCENE_BATTLE else None,
+        )
     final = None
     if scene_id(reader) == SCENE_BATTLE:
         try:
@@ -801,6 +846,9 @@ def run_adaptive_fight(
         ),
         "difficulty": difficulty,
         "opponent": opponent_key,
+        "transition_records": (
+            transition_recorder.transitions if transition_recorder is not None else 0
+        ),
         "seconds": seconds,
         "stop_reason": reason,
         "initial": initial,

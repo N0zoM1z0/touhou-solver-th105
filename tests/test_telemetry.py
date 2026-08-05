@@ -37,6 +37,14 @@ class BoundedTelemetryTests(unittest.TestCase):
             self.assertTrue(Path(f"{path}.2.gz").is_file())
             self.assertFalse(Path(f"{path}.3.gz").exists())
 
+    def test_write_many_uses_the_same_jsonl_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "live.jsonl"
+            writer = BoundedJsonlWriter(path)
+            writer.write_many(({"frame": 1}, {"frame": 2}))
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual([row["frame"] for row in rows], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

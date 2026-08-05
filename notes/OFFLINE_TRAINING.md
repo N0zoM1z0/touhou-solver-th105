@@ -7,9 +7,9 @@ authority. A learned model only ranks candidates that those checks permit.
 
 ## Durable training unit
 
-Full 60 Hz frame dumps are redundant and grow quickly. The durable replay unit
-should instead be one event-aligned semi-Markov transition (one chosen attack,
-defense, movement option, or bounded neutral option):
+Full 60 Hz frame dumps are redundant and grow quickly. The live agent now
+stages one event-aligned semi-Markov transition for each intent segment (attack,
+defense, movement, or bounded neutral option) in `th105_transitions.jsonl`:
 
 ```json
 {
@@ -56,7 +56,11 @@ velocities are quantized; HP and spirit use basis points. The legal-action set
 is essential: an offline trainer must not interpret a native-illegal option as
 an action the behavior policy deliberately rejected. The behavior probability
 is also required for importance-weighted evaluation; deterministic choices use
-`1.0`, while exploration records its real sampling probability.
+`1.0`, while exploration records its real sampling probability. The current
+policy is deterministic and not every branch exports its exact candidate set,
+so those rows deliberately carry `legal_actions: null` and are excluded from
+algorithms that require action support. This is honest missingness, not an empty
+legal set.
 
 Rows should be dictionary encoded into Arrow/Parquet shards with Zstd
 compression. Shards are immutable, checksummed, and listed in a manifest. A

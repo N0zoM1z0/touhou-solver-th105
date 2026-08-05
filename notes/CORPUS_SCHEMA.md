@@ -28,11 +28,14 @@ new observation.
    rotated and must not be the only source for a learned fact.
 4. `runtime/th105_compiled_policy.json` and `runtime/th105_human_policy.json`
    are read-only caches. They can always be rebuilt from tiers 1 and 2.
-5. Future durable option-level replay uses event-aligned semi-Markov transition
-   shards. Each row keeps the quantized start state, legal action set, chosen
+5. `runtime/th105_transitions.jsonl` is the bounded staging corpus for
+   event-aligned semi-Markov transitions. Each row keeps the quantized start
+   state, legal action set when the policy can expose it exactly, chosen
    action and behavior probability, duration, raw outcome components, next
-   state, opponent/difficulty, and independent schema versions. The concrete
-   training/deployment contract is in
+   state, opponent/difficulty, and independent schema versions. Unknown legal
+   sets are explicitly `null`, never guessed. The live JSONL plus eight gzip
+   rotations are capped; an offline compactor can later produce immutable
+   stratified Parquet shards. The concrete training/deployment contract is in
    [`OFFLINE_TRAINING.md`](OFFLINE_TRAINING.md).
 
 Damage is normalized to basis points of the observed maximum (`10000 == 100%`)

@@ -31,6 +31,10 @@ class PolicyObservation:
 class PolicyDecision:
     keys: frozenset[str]
     intent: str
+    # Candidate sets are optional until every native gate can expose them
+    # exactly. Unknown is represented by None; it must never be guessed.
+    legal_actions: tuple[str, ...] | None = None
+    behavior_probability: float = 1.0
 
 
 class CombatPolicy(Protocol):

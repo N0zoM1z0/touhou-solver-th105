@@ -6,6 +6,7 @@ import gzip
 import json
 import os
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -46,6 +47,15 @@ class BoundedJsonlWriter:
         self.path.unlink()
 
     def write(self, record: dict[str, object]) -> None:
+        self.write_many((record,))
+
+    def write_many(self, records: Iterable[dict[str, object]]) -> None:
+        rows = tuple(records) if not isinstance(records, tuple) else records
+        if not rows:
+            return
         with self.path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-            stream.write("\n")
+            for record in rows:
+                stream.write(
+                    json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+                )
+                stream.write("\n")

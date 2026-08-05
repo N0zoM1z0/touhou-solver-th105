@@ -100,6 +100,10 @@ self-damage, spirit cost, and commitment, exploits good results, and retains a
 shrinking exploration bonus. This works without a human corpus; demonstrations
 only improve cold-start ordering.
 
+Event-aligned intent transitions are staged in the bounded, compressed
+`runtime/th105_transitions.jsonl` corpus with raw outcome components and
+versioned state/action schemas; this does not alter the live decision path.
+
 Training permits bounded skill probes in safe far-neutral states and during a
 learned enemy recovery window long enough to cover the move's startup. The same
 native projectile forecast and resource checks remain active, while observed

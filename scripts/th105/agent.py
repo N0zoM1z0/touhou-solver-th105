@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from .constants import (
@@ -401,6 +402,8 @@ def fight(args: argparse.Namespace) -> int:
                 policy_path=args.policy_plugin,
                 telemetry_path=args.telemetry_path,
                 difficulty=DIFFICULTIES[cpu_difficulty(reader)],
+                session_id=uuid.uuid4().hex,
+                game_build_sha256=str(identity.get("sha256", "")) or None,
             )
         else:
             result = run_bootstrap_fight(
@@ -416,6 +419,7 @@ def fight(args: argparse.Namespace) -> int:
 
 def auto_arcade(args: argparse.Namespace) -> int:
     api = Win32()
+    controller_session_id = uuid.uuid4().hex
     if args.launch:
         pid, identity = launch_target(api, args.game_dir, args.timeout)
     else:
@@ -499,6 +503,10 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 telemetry_path=args.telemetry_path,
                                 difficulty=active_difficulty,
                                 terminal_tracker=terminal_tracker,
+                                session_id=controller_session_id,
+                                game_build_sha256=(
+                                    str(identity.get("sha256", "")) or None
+                                ),
                             )
                         else:
                             encounter = run_bootstrap_fight(
@@ -585,6 +593,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 "difficulty_mode": args.difficulty,
                 "active_difficulty": active_difficulty,
                 "curriculum": curriculum.status(),
+                "session_id": controller_session_id,
             }
         print(
             json.dumps(
