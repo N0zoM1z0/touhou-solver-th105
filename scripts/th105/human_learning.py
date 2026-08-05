@@ -16,6 +16,39 @@ if TYPE_CHECKING:
     from .battle import BattleState
 
 
+def normalize_human_pattern(pattern: str) -> str:
+    """Canonicalize a bounded trace and neutralize opposite directions."""
+    allowed = {"up", "down", "toward", "back", "z", "x", "c", "a"}
+    runs: list[tuple[str, int]] = []
+    total_frames = 0
+    for item in pattern.split(","):
+        chord_text, separator, frame_text = item.rpartition("@")
+        if not separator:
+            return ""
+        try:
+            frames = int(frame_text)
+        except ValueError:
+            return ""
+        if frames <= 0 or frames > 180:
+            return ""
+        keys = set() if chord_text == "neutral" else set(chord_text.split("+"))
+        if not keys <= allowed:
+            return ""
+        if {"toward", "back"} <= keys:
+            keys -= {"toward", "back"}
+        if {"up", "down"} <= keys:
+            keys -= {"up", "down"}
+        chord = "+".join(sorted(keys)) if keys else "neutral"
+        total_frames += frames
+        if total_frames > 180:
+            return ""
+        if runs and runs[-1][0] == chord:
+            runs[-1] = (chord, runs[-1][1] + frames)
+        else:
+            runs.append((chord, frames))
+    return ",".join(f"{chord}@{frames}" for chord, frames in runs)
+
+
 def human_demonstration_utility(
     raw: dict[str, object],
     *,
@@ -80,9 +113,17 @@ def compile_human_demonstrations(
                     patterns = raw.get("input_patterns", {})
                     if not isinstance(patterns, dict) or not patterns:
                         continue
+                    normalized_patterns: dict[str, int] = {}
+                    for value, count in patterns.items():
+                        normalized = normalize_human_pattern(str(value))
+                        if normalized:
+                            normalized_patterns[normalized] = (
+                                normalized_patterns.get(normalized, 0) + int(count)
+                            )
+                    if not normalized_patterns:
+                        continue
                     pattern, support = max(
-                        ((str(value), int(count)) for value, count in patterns.items()),
-                        key=lambda item: item[1],
+                        normalized_patterns.items(), key=lambda item: item[1]
                     )
                     score = human_demonstration_utility(
                         raw,
@@ -318,10 +359,13 @@ class HumanDemonstrationRecorder:
     @staticmethod
     def _normalized_chord(keys: frozenset[str], facing: int) -> str:
         normalized = set(keys) - {"left", "right"}
-        if "left" in keys:
-            normalized.add("toward" if facing < 0 else "back")
-        if "right" in keys:
-            normalized.add("toward" if facing > 0 else "back")
+        if not {"left", "right"} <= keys:
+            if "left" in keys:
+                normalized.add("toward" if facing < 0 else "back")
+            if "right" in keys:
+                normalized.add("toward" if facing > 0 else "back")
+        if {"up", "down"} <= normalized:
+            normalized -= {"up", "down"}
         return "+".join(sorted(normalized)) if normalized else "neutral"
 
     @staticmethod

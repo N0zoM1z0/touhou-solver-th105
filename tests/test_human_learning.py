@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from th105.human_learning import (
     HumanDemonstrationRecorder,
     compile_human_demonstrations,
+    normalize_human_pattern,
 )
 
 
@@ -46,6 +47,15 @@ def state(
 
 
 class HumanDemonstrationTests(unittest.TestCase):
+    def test_opposite_directions_are_compiled_as_neutral(self) -> None:
+        self.assertEqual(
+            normalize_human_pattern(
+                "back+toward+z@2,z@1,down+up+x@3,neutral@2"
+            ),
+            "z@3,x@3,neutral@2",
+        )
+        self.assertEqual(normalize_human_pattern("toward+q@2"), "")
+
     def test_aggregates_actions_cancel_edge_and_chain_without_raw_frames(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "human.json"

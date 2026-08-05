@@ -202,3 +202,8 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   candidate counts, total replay attempts, and the last selected signature.
   This makes demonstrated-policy use auditable without retaining raw combat
   frames.
+- **Observed/implemented** rapid physical direction changes can expose one-frame
+  simultaneous opposites in the raw DirectInput buffer. Collection now records
+  those horizontal or vertical pairs as neutral. The offline compiler applies
+  the same canonicalization to earlier sessions and merges their pattern
+  support, so replay never emits `toward+back` or `up+down` chords.
