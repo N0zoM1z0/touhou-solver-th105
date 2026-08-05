@@ -477,6 +477,41 @@ def run_adaptive_fight(
         record = {"time": time.time(), "event": event, **payload}
         telemetry.write(record)
 
+    def persist_current_models(*, compile_models: bool) -> bool:
+        """Atomically checkpoint bounded aggregates during long encounters."""
+        if knowledge_path is None:
+            return False
+        status = plugin.status()
+        metrics = status.get("metrics", {})
+        if not isinstance(metrics, dict):
+            return False
+        learned_profiles = metrics.get("opponent_model", {})
+        if not isinstance(learned_profiles, dict):
+            return False
+        learned_projectiles = metrics.get("projectile_envelope_state", {})
+        learned_defenses = metrics.get("defense_response_state", {})
+        learned_offense = metrics.get("offense_outcome_state", {})
+        persist_character_models(
+            knowledge_path,
+            opponent_key,
+            profiles=learned_profiles,
+            projectile_envelopes=(
+                learned_projectiles if isinstance(learned_projectiles, dict) else {}
+            ),
+            defense_responses=(
+                learned_defenses if isinstance(learned_defenses, dict) else {}
+            ),
+            offense_outcomes=(
+                learned_offense if isinstance(learned_offense, dict) else {}
+            ),
+        )
+        if compile_models:
+            compile_knowledge_file(
+                knowledge_path,
+                knowledge_path.with_name("th105_compiled_policy.json"),
+            )
+        return True
+
     emit(
         "encounter-start",
         {"initial": initial, "plugin": plugin.status(), "frame_hz": frame_hz},
@@ -560,6 +595,12 @@ def run_adaptive_fight(
                     "plugin": compact_plugin_status(plugin.status()),
                 },
             )
+        if frames and frames % max(1, int(frame_hz * 30.0)) == 0:
+            if persist_current_models(compile_models=False):
+                emit(
+                    "model-checkpoint",
+                    {"frame": frames, "opponent": opponent_key},
+                )
 
         frames += 1
         next_tick += period
@@ -587,38 +628,6 @@ def run_adaptive_fight(
         "final": final,
         "plugin": plugin.status(),
     }
-    metrics = result["plugin"].get("metrics", {})
-    learned_profiles = metrics.get("opponent_model", {}) if isinstance(metrics, dict) else {}
-    learned_projectiles = (
-        metrics.get("projectile_envelope_state", {})
-        if isinstance(metrics, dict) else {}
-    )
-    learned_defenses = (
-        metrics.get("defense_response_state", {})
-        if isinstance(metrics, dict) else {}
-    )
-    learned_offense = (
-        metrics.get("offense_outcome_state", {})
-        if isinstance(metrics, dict) else {}
-    )
-    if knowledge_path is not None and isinstance(learned_profiles, dict):
-        persist_character_models(
-            knowledge_path,
-            opponent_key,
-            profiles=learned_profiles,
-            projectile_envelopes=(
-                learned_projectiles if isinstance(learned_projectiles, dict) else {}
-            ),
-            defense_responses=(
-                learned_defenses if isinstance(learned_defenses, dict) else {}
-            ),
-            offense_outcomes=(
-                learned_offense if isinstance(learned_offense, dict) else {}
-            ),
-        )
-        compile_knowledge_file(
-            knowledge_path,
-            knowledge_path.with_name("th105_compiled_policy.json"),
-        )
+    persist_current_models(compile_models=True)
     emit("encounter-end", result)
     return result

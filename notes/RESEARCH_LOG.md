@@ -263,3 +263,8 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   forever; dash and controlled flight remain linear. A Windows-side parity
   probe loaded the rebuilt native DLL and matched the Python reference to
   `2.8e-7` clearance units on mixed ballistic/linear candidates.
+- **Implemented** long encounters now atomically checkpoint all bounded action,
+  projectile, defense, and offense aggregates every 30 seconds as well as at
+  the encounter boundary. An interrupted overnight run loses at most one
+  checkpoint interval; the read-mostly policy compiler still runs only between
+  encounters to keep the per-frame loop free of compilation work.
