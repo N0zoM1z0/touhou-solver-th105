@@ -217,3 +217,8 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   selection scene. It is the candidate VS CPU/Arena curriculum route, but P2
   cursor offsets and CPU ownership still require a live calibration before the
   controller may use it.
+- **Observed (IDA)** `CSelect_update_character_phase` iterates two selection UI
+  records with a `0x28` stride and writes two player-result records with a
+  `0x20` stride. This places the validated P2 cursor/selection mirrors at
+  controller `+0x134/+0x138`, corresponding to P1 `+0x10C/+0x110`. Read-only
+  access is implemented; navigation remains gated on a live game-mode-2 probe.

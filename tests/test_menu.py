@@ -22,6 +22,8 @@ from th105.menu import (
     CHARACTER_VTABLES,
     SELECT_P1_CHARACTER_OFFSET,
     SELECT_P1_CURSOR_OFFSET,
+    SELECT_P2_CHARACTER_OFFSET,
+    SELECT_P2_CURSOR_OFFSET,
     character_name,
 )
 
@@ -39,6 +41,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(CHARACTER_CURSOR_SLOTS[0:3], ("reimu", "sakuya", "youmu"))
         self.assertEqual(SELECT_P1_CURSOR_OFFSET, 0x10C)
         self.assertEqual(SELECT_P1_CHARACTER_OFFSET, 0x110)
+        self.assertEqual(SELECT_P2_CURSOR_OFFSET, 0x134)
+        self.assertEqual(SELECT_P2_CHARACTER_OFFSET, 0x138)
         self.assertEqual(GAME_MODE_ARCADE, 1)
         self.assertEqual(CHARACTER_VTABLES["sakuya"], 0x006B0924)
         self.assertEqual(character_name(0x006B1E3C), "reisen")

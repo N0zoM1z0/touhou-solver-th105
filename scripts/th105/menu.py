@@ -65,6 +65,8 @@ CHARACTER_VTABLES = {
 VTABLE_CHARACTERS = {vtable: name for name, vtable in CHARACTER_VTABLES.items()}
 SELECT_P1_CURSOR_OFFSET = 0x10C
 SELECT_P1_CHARACTER_OFFSET = 0x110
+SELECT_P2_CURSOR_OFFSET = 0x134
+SELECT_P2_CHARACTER_OFFSET = 0x138
 
 
 class MenuKeyboard(Protocol):
@@ -111,12 +113,18 @@ def wait_for_scene(reader: ProcessReader, expected: int, timeout: float) -> int:
     raise TimeoutError(f"expected scene {expected}, last scene was {last}")
 
 
-def p1_character_selection(reader: ProcessReader) -> int:
+def _character_selection(
+    reader: ProcessReader,
+    *,
+    cursor_offset: int,
+    selected_offset: int,
+    label: str,
+) -> int:
     controller = scene_controller(reader)
     if scene_id(reader) != SCENE_SELECT or not controller:
-        raise RuntimeError("P1 character selection requested outside scene 3")
-    cursor = reader.u32(controller + SELECT_P1_CURSOR_OFFSET)
-    selected = reader.u32(controller + SELECT_P1_CHARACTER_OFFSET)
+        raise RuntimeError(f"{label} character selection requested outside scene 3")
+    cursor = reader.u32(controller + cursor_offset)
+    selected = reader.u32(controller + selected_offset)
     if cursor >= len(CHARACTER_CURSOR_SLOTS) or selected >= len(CHARACTER_CURSOR_SLOTS):
         raise RuntimeError(
             f"invalid character-select state cursor={cursor}, selected={selected}"
@@ -126,6 +134,24 @@ def p1_character_selection(reader: ProcessReader) -> int:
             f"character-select fields disagree cursor={cursor}, selected={selected}"
         )
     return selected
+
+
+def p1_character_selection(reader: ProcessReader) -> int:
+    return _character_selection(
+        reader,
+        cursor_offset=SELECT_P1_CURSOR_OFFSET,
+        selected_offset=SELECT_P1_CHARACTER_OFFSET,
+        label="P1",
+    )
+
+
+def p2_character_selection(reader: ProcessReader) -> int:
+    return _character_selection(
+        reader,
+        cursor_offset=SELECT_P2_CURSOR_OFFSET,
+        selected_offset=SELECT_P2_CHARACTER_OFFSET,
+        label="P2",
+    )
 
 
 def select_p1_character(
