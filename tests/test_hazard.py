@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import math
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from th105.hazard import HazardProjectile, MovementCandidate, evaluate_paths_reference
+
+
+class HazardReferenceTests(unittest.TestCase):
+    def test_moving_away_beats_standing_still(self) -> None:
+        projectiles = (HazardProjectile(100.0, 0.0, -10.0, 0.0, 8.0, 8.0),)
+        candidates = (MovementCandidate(0.0, 0.0), MovementCandidate(-8.0, 0.0))
+        still, retreat = evaluate_paths_reference(
+            0.0, 0.0, 10.0, 20.0, projectiles, candidates, horizon=12
+        )
+        self.assertFalse(still.safe)
+        self.assertTrue(retreat.safe)
+        self.assertGreater(retreat.minimum_clearance, still.minimum_clearance)
+
+    def test_empty_world_has_infinite_clearance(self) -> None:
+        result = evaluate_paths_reference(
+            5.0,
+            7.0,
+            1.0,
+            1.0,
+            (),
+            (MovementCandidate(2.0, -1.0),),
+            horizon=4,
+        )[0]
+        self.assertTrue(result.safe)
+        self.assertTrue(math.isinf(result.minimum_clearance))
+        self.assertEqual((result.final_x, result.final_y), (13.0, 3.0))
+
+    def test_graze_window_ignores_early_projectile_overlap(self) -> None:
+        projectile = HazardProjectile(20.0, 0.0, 0.0, 0.0, 8.0, 8.0)
+        unsafe, graze = evaluate_paths_reference(
+            0.0,
+            0.0,
+            10.0,
+            20.0,
+            (projectile,),
+            (
+                MovementCandidate(4.0, 0.0),
+                MovementCandidate(4.0, 0.0, graze_frames=5),
+            ),
+            horizon=5,
+        )
+        self.assertFalse(unsafe.safe)
+        self.assertTrue(graze.safe)
+
+    def test_startup_delay_can_make_a_dash_too_late(self) -> None:
+        projectile = HazardProjectile(35.0, 0.0, -8.0, 0.0, 4.0, 4.0)
+        immediate, delayed = evaluate_paths_reference(
+            0.0,
+            0.0,
+            5.0,
+            10.0,
+            (projectile,),
+            (
+                MovementCandidate(-8.0, 0.0),
+                MovementCandidate(-8.0, 0.0, startup_frames=4),
+            ),
+            horizon=6,
+        )
+        self.assertTrue(immediate.safe)
+        self.assertFalse(delayed.safe)
+        self.assertEqual(delayed.final_x, -16.0)
+
+    def test_projectile_acceleration_changes_future_collision(self) -> None:
+        linear, accelerating = (
+            HazardProjectile(100.0, 0.0, -2.0, 0.0, 4.0, 4.0),
+            HazardProjectile(
+                100.0, 0.0, -2.0, 0.0, 4.0, 4.0,
+                acceleration_x=-2.0,
+            ),
+        )
+        candidate = (MovementCandidate(0.0, 0.0),)
+        self.assertTrue(
+            evaluate_paths_reference(
+                0, 0, 5, 10, (linear,), candidate, horizon=10
+            )[0].safe
+        )
+        self.assertFalse(
+            evaluate_paths_reference(
+                0, 0, 5, 10, (accelerating,), candidate, horizon=10
+            )[0].safe
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
