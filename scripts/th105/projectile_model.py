@@ -119,7 +119,15 @@ class ProjectileEnvelopeModel:
                         )
                     )
             if ranked:
-                gap, _distance2, snapshot, disappeared = min(ranked)
+                gap, _distance2, snapshot, disappeared = min(
+                    ranked,
+                    key=lambda item: (
+                        item[0],
+                        item[1],
+                        item[2].pointer,
+                        int(item[3]),
+                    ),
+                )
                 learned = min(
                     self.maximum_extent,
                     max(self.default_extent, gap + 8.0),

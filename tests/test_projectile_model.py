@@ -109,6 +109,24 @@ class ProjectileEnvelopeTests(unittest.TestCase):
         self.assertEqual(second.extent_for(811), 55.0)
         self.assertEqual(second.samples[811], 3)
 
+    def test_equal_distance_candidates_use_stable_pointer_tiebreak(self) -> None:
+        model = ProjectileEnvelopeModel()
+        impact = model.observe(
+            (
+                projectile(0x2000, 812, 40.0, 0.0),
+                projectile(0x1000, 811, 40.0, 0.0),
+            ),
+            player_x=0.0,
+            player_y=0.0,
+            player_half_width=18.0,
+            player_half_height=42.0,
+            took_damage=True,
+            first_contact=True,
+        )
+        self.assertIsNotNone(impact)
+        assert impact is not None
+        self.assertEqual((impact.pointer, impact.action_id), (0x1000, 811))
+
 
 if __name__ == "__main__":
     unittest.main()
