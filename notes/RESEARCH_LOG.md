@@ -207,3 +207,13 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   those horizontal or vertical pairs as neutral. The offline compiler applies
   the same canonicalization to earlier sessions and merges their pattern
   support, so replay never emits `toward+back` or `up+down` chords.
+- **Observed (IDA RTTI)** all 15 concrete fighter vtables are uniquely named in
+  the supported binary. Runtime telemetry now resolves them to roster names;
+  the first demonstration matchups were Reimu (`0x006B013C`), Yuyuko
+  (`0x006B165C`), Komachi (`0x006B2074`), and Aya (`0x006B22DC`). Reisen is
+  named `Udonge` in RTTI and has fighter vtable `0x006B1E3C`.
+- **Observed/inferred** main-menu index 2 calls the now-renamed
+  `configure_game_mode_and_load_select` with `(2, 1)` and enters the shared
+  selection scene. It is the candidate VS CPU/Arena curriculum route, but P2
+  cursor offsets and CPU ownership still require a live calibration before the
+  controller may use it.

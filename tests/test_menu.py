@@ -17,7 +17,13 @@ from th105.constants import (
     SCENE_MAIN_MENU,
     SCENE_SELECT,
 )
-from th105.menu import CHARACTER_CURSOR_SLOTS, SELECT_P1_CHARACTER_OFFSET, SELECT_P1_CURSOR_OFFSET
+from th105.menu import (
+    CHARACTER_CURSOR_SLOTS,
+    CHARACTER_VTABLES,
+    SELECT_P1_CHARACTER_OFFSET,
+    SELECT_P1_CURSOR_OFFSET,
+    character_name,
+)
 
 
 class NativeContractTests(unittest.TestCase):
@@ -34,6 +40,9 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(SELECT_P1_CURSOR_OFFSET, 0x10C)
         self.assertEqual(SELECT_P1_CHARACTER_OFFSET, 0x110)
         self.assertEqual(GAME_MODE_ARCADE, 1)
+        self.assertEqual(CHARACTER_VTABLES["sakuya"], 0x006B0924)
+        self.assertEqual(character_name(0x006B1E3C), "reisen")
+        self.assertIsNone(character_name(0xDEADBEEF))
 
 
 if __name__ == "__main__":

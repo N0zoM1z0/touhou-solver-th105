@@ -16,7 +16,7 @@ from .constants import (
     BATTLE_MANAGER_P2_OFFSET,
     SCENE_BATTLE,
 )
-from .menu import scene_id
+from .menu import character_name, scene_id
 from .model_compiler import compile_knowledge_file
 from .knowledge import (
     defense_model_for,
@@ -288,11 +288,13 @@ def battle_state_json(state: BattleState) -> dict[str, object]:
             **asdict(state.p1),
             "pointer": f"0x{state.p1.pointer:08X}",
             "vtable": f"0x{state.p1.vtable:08X}",
+            "character": character_name(state.p1.vtable),
         },
         "p2": {
             **asdict(state.p2),
             "pointer": f"0x{state.p2.pointer:08X}",
             "vtable": f"0x{state.p2.vtable:08X}",
+            "character": character_name(state.p2.vtable),
         },
     }
 

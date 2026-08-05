@@ -44,12 +44,35 @@ CHARACTER_CURSOR_SLOTS = (
     "tenshi",
 )
 CHARACTERS = CHARACTER_CURSOR_SLOTS
+# Exact fighter vtables recovered from the supported binary's MSVC RTTI.
+CHARACTER_VTABLES = {
+    "reimu": 0x006B013C,
+    "sakuya": 0x006B0924,
+    "youmu": 0x006B1154,
+    "marisa": 0x006B0594,
+    "alice": 0x006B0BEC,
+    "remilia": 0x006B13D4,
+    "yuyuko": 0x006B165C,
+    "patchouli": 0x006B0EBC,
+    "suika": 0x006B1B9C,
+    "reisen": 0x006B1E3C,  # RTTI class name: Udonge
+    "aya": 0x006B22DC,
+    "iku": 0x006B2534,
+    "komachi": 0x006B2074,
+    "yukari": 0x006B18DC,
+    "tenshi": 0x006B279C,
+}
+VTABLE_CHARACTERS = {vtable: name for name, vtable in CHARACTER_VTABLES.items()}
 SELECT_P1_CURSOR_OFFSET = 0x10C
 SELECT_P1_CHARACTER_OFFSET = 0x110
 
 
 class MenuKeyboard(Protocol):
     def tap(self, name: str, hold_ms: int = 65, gap_ms: int = 170) -> None: ...
+
+
+def character_name(vtable: int) -> str | None:
+    return VTABLE_CHARACTERS.get(vtable)
 
 
 def scene_id(reader: ProcessReader) -> int:
