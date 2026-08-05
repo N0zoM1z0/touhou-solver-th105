@@ -19,6 +19,8 @@ from .constants import (
 from .menu import character_name, scene_id
 from .model_compiler import compile_knowledge_file
 from .knowledge import (
+    attack_geometry_for,
+    cancel_graph_for,
     defense_model_for,
     offense_model_for,
     persist_character_models,
@@ -401,8 +403,9 @@ def run_adaptive_fight(
     deadline = time.perf_counter() + seconds
     period = 1.0 / frame_hz
     next_tick = time.perf_counter()
-    frames = guard_frames = projectile_guard_frames = 0
+    frames = guard_frames = projectile_guard_frames = decision_frames = 0
     round_end_frames = 0
+    terminal_reported = False
     last_enemy_projectiles: tuple[ProjectileState, ...] = ()
     last_own_projectiles: tuple[ProjectileState, ...] = ()
     nearest_enemy_projectile: float | None = None
@@ -432,6 +435,14 @@ def run_adaptive_fight(
     )
     prior_offense_model = (
         offense_model_for(knowledge_path, opponent_key)
+        if knowledge_path is not None else {}
+    )
+    prior_attack_geometry = (
+        attack_geometry_for(knowledge_path, opponent_key)
+        if knowledge_path is not None else {}
+    )
+    prior_cancel_graph = (
+        cancel_graph_for(knowledge_path, opponent_key)
         if knowledge_path is not None else {}
     )
     prior_human_demonstrations: dict[str, object] = {}
@@ -467,6 +478,8 @@ def run_adaptive_fight(
                 "opponent_assessment": metrics.get("opponent_assessment"),
                 "projectile_envelopes": metrics.get("projectile_envelopes"),
                 "human_demonstrations": metrics.get("human_demonstrations"),
+                "attack_geometry": metrics.get("attack_geometry"),
+                "cancel_graph": metrics.get("cancel_graph"),
                 "performance": metrics.get("performance"),
             },
         }
@@ -479,7 +492,10 @@ def run_adaptive_fight(
 
     def persist_current_models(*, compile_models: bool) -> bool:
         """Atomically checkpoint bounded aggregates during long encounters."""
-        if knowledge_path is None:
+        # Scene 5 can briefly reappear with dead fighters during transitions.
+        # Such a shell never seeded its plugin and must not erase cumulative
+        # knowledge with an empty state.
+        if knowledge_path is None or decision_frames == 0:
             return False
         status = plugin.status()
         metrics = status.get("metrics", {})
@@ -491,6 +507,8 @@ def run_adaptive_fight(
         learned_projectiles = metrics.get("projectile_envelope_state", {})
         learned_defenses = metrics.get("defense_response_state", {})
         learned_offense = metrics.get("offense_outcome_state", {})
+        learned_attack_geometry = metrics.get("attack_geometry_state", {})
+        learned_cancel_graph = metrics.get("cancel_graph_state", {})
         persist_character_models(
             knowledge_path,
             opponent_key,
@@ -503,6 +521,13 @@ def run_adaptive_fight(
             ),
             offense_outcomes=(
                 learned_offense if isinstance(learned_offense, dict) else {}
+            ),
+            attack_geometry=(
+                learned_attack_geometry
+                if isinstance(learned_attack_geometry, dict) else {}
+            ),
+            cancel_graph=(
+                learned_cancel_graph if isinstance(learned_cancel_graph, dict) else {}
             ),
         )
         if compile_models:
@@ -521,9 +546,34 @@ def run_adaptive_fight(
         if scene_id(reader) != SCENE_BATTLE:
             reason = f"scene-{scene_id(reader)}"
             break
-        state = read_battle_state(reader)
+        try:
+            state = read_battle_state(reader)
+        except (OSError, RuntimeError):
+            # Scene transitions can invalidate the fighter manager one frame
+            # before the scene byte changes. End normally so learned state is
+            # checkpointed instead of escaping to the outer recovery loop.
+            reason = "battle-state-transition"
+            break
         me, enemy = state.p1, state.p2
         if me.hp <= 0 or enemy.hp <= 0:
+            if not terminal_reported:
+                won = (
+                    True if enemy.hp <= 0 < me.hp
+                    else False if me.hp <= 0 < enemy.hp
+                    else None
+                )
+                plugin.observe_terminal(
+                    {
+                        "frame": frames,
+                        "won": won,
+                        "me_hp": me.hp,
+                        "enemy_hp": enemy.hp,
+                        "max_me_hp": me.max_hp,
+                        "max_enemy_hp": enemy.max_hp,
+                        "spirit": me.spirit,
+                    }
+                )
+                terminal_reported = True
             # Z rising edges advance round-result text and post-fight dialogue.
             # Keep them sparse so one edge cannot leak through several screens.
             keys = {"z"} if round_end_frames % 30 == 0 else set()
@@ -535,8 +585,13 @@ def run_adaptive_fight(
             round_end_frames += 1
         else:
             round_end_frames = 0
-            last_enemy_projectiles = read_active_projectiles(reader, enemy, me)
-            last_own_projectiles = read_active_projectiles(reader, me, enemy)
+            terminal_reported = False
+            try:
+                last_enemy_projectiles = read_active_projectiles(reader, enemy, me)
+                last_own_projectiles = read_active_projectiles(reader, me, enemy)
+            except (OSError, RuntimeError):
+                reason = "projectile-state-transition"
+                break
             nearest_enemy_projectile = None
             for projectile in last_enemy_projectiles:
                 distance_to_projectile = math.hypot(
@@ -556,8 +611,11 @@ def run_adaptive_fight(
                     prior_defense_model=prior_defense_model,
                     prior_offense_model=prior_offense_model,
                     prior_human_demonstrations=prior_human_demonstrations,
+                    prior_attack_geometry=prior_attack_geometry,
+                    prior_cancel_graph=prior_cancel_graph,
                 )
             )
+            decision_frames += 1
             last_intent = decision.intent
             if "guard" in decision.intent:
                 guard_frames += 1
@@ -595,7 +653,7 @@ def run_adaptive_fight(
                     "plugin": compact_plugin_status(plugin.status()),
                 },
             )
-        if frames and frames % max(1, int(frame_hz * 30.0)) == 0:
+        if frames and frames % max(1, int(frame_hz * 10.0)) == 0:
             if persist_current_models(compile_models=False):
                 emit(
                     "model-checkpoint",
@@ -611,10 +669,17 @@ def run_adaptive_fight(
             next_tick = time.perf_counter()
 
     keyboard.set_chord(set())
-    final = battle_state_json(read_battle_state(reader)) if scene_id(reader) == SCENE_BATTLE else None
+    final = None
+    if scene_id(reader) == SCENE_BATTLE:
+        try:
+            final = battle_state_json(read_battle_state(reader))
+        except (OSError, RuntimeError):
+            if reason == "duration":
+                reason = "battle-state-transition"
     result = {
         "policy": "hot-reload",
         "frames": frames,
+        "decision_frames": decision_frames,
         "guard_frames": guard_frames,
         "projectile_guard_frames": projectile_guard_frames,
         "enemy_projectiles": len(last_enemy_projectiles),

@@ -19,6 +19,8 @@ class HazardProjectile:
     half_height: float = 16.0
     acceleration_x: float = 0.0
     acceleration_y: float = 0.0
+    active_start_frame: int = 0
+    active_end_frame: int = 0
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,10 @@ def evaluate_paths_reference(
             ):
                 continue
             for projectile in projectiles:
+                if projectile.active_start_frame > 0 and frame < projectile.active_start_frame:
+                    continue
+                if projectile.active_end_frame > 0 and frame > projectile.active_end_frame:
+                    continue
                 clearance = _signed_clearance(
                     x,
                     y,
@@ -152,6 +158,8 @@ class _Projectile(ctypes.Structure):
         ("half_height", ctypes.c_float),
         ("acceleration_x", ctypes.c_float),
         ("acceleration_y", ctypes.c_float),
+        ("active_start_frame", ctypes.c_int32),
+        ("active_end_frame", ctypes.c_int32),
     )
 
 
@@ -181,7 +189,7 @@ class _Result(ctypes.Structure):
 
 
 class NativeHazardKernel:
-    ABI_VERSION = 6
+    ABI_VERSION = 7
 
     def __init__(self, path: Path | None = None) -> None:
         if os.name != "nt":

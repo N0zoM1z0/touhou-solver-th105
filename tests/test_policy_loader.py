@@ -26,6 +26,27 @@ def create_policy():
 
 
 class HotReloadPolicyTests(unittest.TestCase):
+    def test_terminal_result_is_forwarded_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.py"
+            path.write_text(
+                """
+from th105.policy_api import POLICY_API_VERSION, PolicyDecision
+class Policy:
+    api_version = POLICY_API_VERSION
+    name = 'terminal'
+    def __init__(self): self.wins = 0
+    def decide(self, observation): return PolicyDecision(frozenset(), 'ok')
+    def observe_terminal(self, outcome): self.wins += int(outcome.get('won') is True)
+    def metrics(self): return {'wins': self.wins}
+def create_policy(): return Policy()
+""",
+                encoding="utf-8",
+            )
+            loader = HotReloadPolicy(path, check_interval_frames=100)
+            loader.observe_terminal({"frame": 1, "won": True})
+            self.assertEqual(loader.status()["metrics"]["wins"], 1)
+
     def test_reload_and_compile_failure_keep_last_good(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.py"

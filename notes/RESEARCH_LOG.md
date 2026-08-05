@@ -264,7 +264,62 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   probe loaded the rebuilt native DLL and matched the Python reference to
   `2.8e-7` clearance units on mixed ballistic/linear candidates.
 - **Implemented** long encounters now atomically checkpoint all bounded action,
-  projectile, defense, and offense aggregates every 30 seconds as well as at
+  projectile, defense, and offense aggregates every 10 seconds as well as at
   the encounter boundary. An interrupted overnight run loses at most one
   checkpoint interval; the read-mostly policy compiler still runs only between
   encounters to keep the per-frame loop free of compilation work.
+- **Implemented** a character-agnostic attack geometry learner keyed by native
+  `action_id:sequence`, with bounded per-pose rows. It records local attack-box
+  envelopes plus first/last active elapsed frames, persists them per opponent,
+  and compiles compact read-mostly lookups. No move names, matchup rules, or
+  manually entered hitboxes participate.
+- **Implemented** native hazard ABI 7 adds delayed active intervals to hazards.
+  On repeat encounters, an opponent melee action can therefore contribute its
+  previously observed future hitbox during startup. All legal guard/movement
+  responses remain available to the learner, but geometrically colliding
+  movement is pruned before bandit selection and is never credited as though a
+  different response had been executed.
+- **Observed (live Easy Arcade, Youmu)** after a cold encounter began, the
+  learner accumulated 23 poses and 15 active-box observations for two early
+  action/sequence rows. During a later action `305:0` frame where the current
+  native attack vector was still empty, the learned model supplied one delayed
+  melee hazard to the native solver. All evaluated paths were reported safe at
+  that particular spacing, so no movement was falsely forced.
+- **Observed/fixed** scene transitions can briefly start a second battle shell
+  with already-dead fighters. Because it executes zero policy decisions, its
+  models were never seeded; encounter-end persistence could then overwrite the
+  just-learned character state with empty dictionaries. Persistence now
+  requires at least one valid decision frame, making transition-only shells
+  read-only and preserving cumulative overnight learning.
+- **Observed/fixed** a second transition path invalidated the fighter or object
+  manager while the scene byte still reported battle, raising to the outer
+  recovery loop before encounter-end persistence. Bounded fighter/projectile
+  read failures now terminate the encounter normally, checkpoint the valid
+  decision frames, and then let the existing outer loop reacquire fresh actors.
+- **Observed/fixed** hot reload transferred defense/offense/projectile state but
+  not cumulative temporal action profiles, then allowed encounter-start disk
+  priors to overwrite the transferred state on the new generation's first
+  decision. Export/import now carries both opponent and own temporal profiles
+  and marks all transferred model families as already seeded; disk priors are
+  used only on a genuinely fresh policy.
+- **Implemented** a bounded native cancel graph records only accepted Sakuya
+  offensive transitions. Attribution starts on a Z/X/C rising edge, retains its
+  facing-normalized chord and exact source action/sequence/pose/frame for at
+  most six frames (covering the command buffer), and binds it to the first
+  resulting offensive action transition. Automatic animation transitions and
+  idle/reaction exits are rejected. During a real enemy hit reaction, only an
+  edge observed at the current pose/timing may be explored; its continuation
+  reward is learned online rather than assigned from a guide.
+- **Implemented** reward v1 separates durable native outcomes from their
+  scalarization. Attack and defense rows now retain raw plus max-normalized
+  damage/resource components and compact eight-bin downside histograms. The
+  scorer penalizes whiffs, losing trades, commitment, resource use, and
+  high-damage tails.
+- **Implemented** the battle shell reports every native round result exactly
+  once. Recent completed offense options receive a small decayed eligibility
+  credit, while immediate exchange damage remains dominant. Round aggregates
+  and reward version persist, and legacy raw-only rows remain readable.
+- **Specified** independent corpus schema, reward, and compiled-artifact
+  versions in `notes/CORPUS_SCHEMA.md`. Raw sufficient statistics are durable;
+  reward/Q/ranks are disposable derivatives, keeping the corpus reusable by a
+  later offline RL or server-trained model.

@@ -7,7 +7,9 @@ one.  Unknown actions retain a conservative response-order prior.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+
+from .reward import basis_points, damage_bin_index, upper_tail_mean_bp
 
 
 @dataclass
@@ -18,6 +20,10 @@ class ResponseStats:
     total_damage: int = 0
     guard_events: int = 0
     total_guard_cost: int = 0
+    normalized_samples: int = 0
+    total_damage_bp: int = 0
+    total_guard_cost_bp: int = 0
+    damage_histogram: list[int] = field(default_factory=lambda: [0] * 8)
 
     @property
     def mean_damage(self) -> float:
@@ -25,14 +31,24 @@ class ResponseStats:
 
     @property
     def loss(self) -> float:
-        # Damage dominates. Guard cost only separates two otherwise safe
-        # responses; repeated success makes a response increasingly trusted.
-        reliability_credit = min(200.0, self.successes * 20.0)
+        trials = max(1, self.trials)
+        if self.normalized_samples:
+            mean_damage = self.total_damage_bp / self.normalized_samples
+            mean_guard = self.total_guard_cost_bp / self.normalized_samples
+        else:
+            # Migration for old TH105 checkpoints (10000 HP / 1000 spirit).
+            mean_damage = self.total_damage / trials
+            mean_guard = self.total_guard_cost * 10.0 / trials
+        tail = upper_tail_mean_bp(self.damage_histogram)
+        excess_tail = max(0.0, tail - mean_damage)
+        failure_rate = self.damage_events / trials
+        success_rate = self.successes / trials
         return (
-            self.mean_damage
-            + self.damage_events * 120.0
-            + self.total_guard_cost / max(1, self.guard_events) * 0.15
-            - reliability_credit
+            1.60 * mean_damage
+            + 0.45 * excess_tail
+            + 450.0 * failure_rate
+            + 0.12 * mean_guard
+            - 50.0 * success_rate
         )
 
 
@@ -48,6 +64,8 @@ class DefenseEpisode:
     damage: int = 0
     guard_cost: int = 0
     applied: bool = False
+    max_hp: int = 10000
+    max_spirit: int = 1000
 
 
 class DefenseResponseModel:
@@ -105,6 +123,8 @@ class DefenseResponseModel:
         hp: int,
         spirit: int,
         distance: float,
+        max_hp: int = 10000,
+        max_spirit: int = 1000,
     ) -> None:
         if self.episode is not None:
             self.finish()
@@ -116,6 +136,8 @@ class DefenseResponseModel:
             hp,
             spirit,
             distance,
+            max_hp=max(1, max_hp),
+            max_spirit=max(1, max_spirit),
         )
 
     def observe(self, *, hp: int, spirit: int, distance: float) -> None:
@@ -146,6 +168,13 @@ class DefenseResponseModel:
             episode.response, ResponseStats()
         )
         stats.trials += 1
+        damage_bp = basis_points(episode.damage, episode.max_hp)
+        stats.normalized_samples += 1
+        stats.total_damage_bp += damage_bp
+        stats.total_guard_cost_bp += basis_points(
+            episode.guard_cost, episode.max_spirit
+        )
+        stats.damage_histogram[damage_bin_index(damage_bp)] += 1
         if episode.damage:
             stats.damage_events += 1
             stats.total_damage += episode.damage
@@ -180,6 +209,12 @@ class DefenseResponseModel:
             for response, raw in raw_row.items():
                 if not isinstance(raw, dict):
                     continue
+                histogram = raw.get("damage_histogram", [0] * 8)
+                normalized_histogram = (
+                    [max(0, int(value)) for value in histogram[:8]]
+                    if isinstance(histogram, list) else [0] * 8
+                )
+                normalized_histogram += [0] * (8 - len(normalized_histogram))
                 row[str(response)] = ResponseStats(
                     trials=int(raw.get("trials", 0)),
                     successes=int(raw.get("successes", 0)),
@@ -187,6 +222,10 @@ class DefenseResponseModel:
                     total_damage=int(raw.get("total_damage", 0)),
                     guard_events=int(raw.get("guard_events", 0)),
                     total_guard_cost=int(raw.get("total_guard_cost", 0)),
+                    normalized_samples=int(raw.get("normalized_samples", 0)),
+                    total_damage_bp=int(raw.get("total_damage_bp", 0)),
+                    total_guard_cost_bp=int(raw.get("total_guard_cost_bp", 0)),
+                    damage_histogram=normalized_histogram,
                 )
 
     def metrics(self) -> dict[str, object]:

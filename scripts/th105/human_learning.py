@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .offense_learning import combat_context
+from .reward import REWARD_VERSION
 from .telemetry import BoundedJsonlWriter
 
 if TYPE_CHECKING:
@@ -96,6 +97,8 @@ def compile_human_demonstrations(
     """Compile bounded raw aggregates into ranked online candidate lists."""
     output: dict[str, object] = {
         "version": 1,
+        "source_schema_version": int(data.get("schema_version", 1)),
+        "reward_version": REWARD_VERSION,
         "generated_at": time.time(),
         "matchups": {},
     }
@@ -326,10 +329,11 @@ class HumanDemonstrationRecorder:
 
     def _load(self) -> dict[str, object]:
         if not self.output_path.is_file():
-            return {"version": 1, "matchups": {}}
+            return {"version": 1, "schema_version": 1, "matchups": {}}
         data = json.loads(self.output_path.read_text(encoding="utf-8"))
         if data.get("version") != 1 or not isinstance(data.get("matchups"), dict):
             raise ValueError(f"unsupported human demonstration format: {self.output_path}")
+        data.setdefault("schema_version", 1)
         return data
 
     def _matchup(self) -> dict[str, object]:

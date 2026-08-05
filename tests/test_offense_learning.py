@@ -58,6 +58,29 @@ class ActionOutcomeTests(unittest.TestCase):
         second = ActionOutcomeModel()
         second.import_state(first.export_state())
         self.assertEqual(second.table["ctx"]["AAAA"].total_damage, 500)
+        self.assertEqual(second.table["ctx"]["AAAA"].normalized_samples, 1)
+
+    def test_terminal_credit_is_decayed_and_round_summary_is_persisted(self) -> None:
+        model = ActionOutcomeModel()
+        model.begin(
+            "safe", "ctx", frame=0, commitment=5,
+            enemy_hp=10000, me_hp=10000, spirit=1000,
+        )
+        model.observe(frame=5, enemy_hp=9700, me_hp=10000, spirit=1000)
+        model.observe_terminal(
+            frame=125, won=True, enemy_hp=0, me_hp=4000, spirit=500,
+        )
+        stats = model.table["ctx"]["safe"]
+        self.assertGreater(stats.terminal_win_credit, 0.0)
+        restored = ActionOutcomeModel()
+        restored.import_state(model.export_state())
+        self.assertEqual(restored.rounds.wins, 1)
+
+    def test_old_raw_checkpoint_remains_usable(self) -> None:
+        model = ActionOutcomeModel()
+        model.import_state({"ctx": {"legacy": {"trials": 2, "total_damage": 600}}})
+        self.assertEqual(model.table["ctx"]["legacy"].normalized_samples, 0)
+        self.assertGreater(model.adjustment("legacy", "ctx"), -1200.0)
 
 
 if __name__ == "__main__":

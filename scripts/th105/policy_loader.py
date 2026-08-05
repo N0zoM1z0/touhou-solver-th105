@@ -117,6 +117,21 @@ class HotReloadPolicy:
             return PolicyDecision(frozenset(keys), "policy-error-guard")
         return decision
 
+    def observe_terminal(self, outcome: dict[str, object]) -> None:
+        """Forward a round result when the active policy supports learning it."""
+        self.maybe_reload(int(outcome.get("frame", 0)))
+        if self.policy is None:
+            return
+        callback = getattr(self.policy, "observe_terminal", None)
+        if not callable(callback):
+            return
+        try:
+            callback(outcome)
+        except Exception as exc:
+            # Terminal telemetry must never kill a continuous campaign.
+            self.reload_failures += 1
+            self.last_error = f"terminal {type(exc).__name__}: {exc}"
+
     def status(self) -> dict[str, int | str | None | object]:
         try:
             policy_metrics = self.policy.metrics() if self.policy is not None else {}

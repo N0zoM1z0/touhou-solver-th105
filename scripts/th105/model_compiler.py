@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 from .defense_learning import DefenseResponseModel
+from .offense_learning import ActionOutcomeModel
+from .reward import REWARD_VERSION, empirical_action_value
 
 
 DEFENSE_ORDER = ("high_guard", "low_guard", "backdash", "jump_back")
@@ -15,6 +17,8 @@ DEFENSE_ORDER = ("high_guard", "low_guard", "backdash", "jump_back")
 def compile_knowledge(data: dict[str, object]) -> dict[str, object]:
     output: dict[str, object] = {
         "version": 1,
+        "source_schema_version": int(data.get("schema_version", 1)),
+        "reward_version": REWARD_VERSION,
         "generated_at": time.time(),
         "characters": {},
     }
@@ -73,34 +77,76 @@ def compile_knowledge(data: dict[str, object]) -> dict[str, object]:
         offense_state = raw_entry.get("offense_outcomes", {})
         offense_choices: dict[str, object] = {}
         if isinstance(offense_state, dict):
-            for context, raw_row in offense_state.items():
-                if not isinstance(raw_row, dict):
-                    continue
-                ranked: list[tuple[float, str, dict[str, object]]] = []
-                for label, raw in raw_row.items():
-                    if not isinstance(raw, dict):
-                        continue
-                    trials = max(1, int(raw.get("trials", 0)))
-                    utility = (
-                        float(raw.get("total_damage", 0))
-                        - 1.35 * float(raw.get("total_self_damage", 0))
-                        - 0.20 * float(raw.get("total_spirit_cost", 0))
-                        - 2.0 * float(raw.get("total_commitment", 0))
-                    ) / trials
-                    ranked.append((utility, str(label), raw))
+            offense = ActionOutcomeModel()
+            offense.import_state(offense_state)
+            for context, row in offense.table.items():
+                ranked = [
+                    (empirical_action_value(stats), label, stats)
+                    for label, stats in row.items()
+                ]
                 if ranked:
-                    utility, label, raw = max(ranked)
+                    utility, label, stats = max(ranked)
                     offense_choices[str(context)] = {
                         "action": label,
                         "utility": utility,
-                        "trials": int(raw.get("trials", 0)),
-                        "connections": int(raw.get("connections", 0)),
+                        "trials": stats.trials,
+                        "connections": stats.connections,
+                        "reward_version": REWARD_VERSION,
                     }
+        geometry_state = raw_entry.get("attack_geometry", {})
+        attack_geometry: dict[str, object] = {}
+        if isinstance(geometry_state, dict):
+            for signature, raw in geometry_state.items():
+                if not isinstance(raw, dict):
+                    continue
+                envelope = raw.get("attack_envelope")
+                if not isinstance(envelope, list) or len(envelope) != 4:
+                    continue
+                attack_geometry[str(signature)] = {
+                    "first_active": int(raw.get("first_active_elapsed", 0)),
+                    "last_active": int(raw.get("last_active_elapsed", 0)),
+                    "envelope": [int(value) for value in envelope],
+                    "samples": int(raw.get("active_observations", 0)),
+                    "poses": len(raw.get("poses", {}))
+                    if isinstance(raw.get("poses"), dict) else 0,
+                }
+        cancel_state = raw_entry.get("cancel_graph", {})
+        cancel_edges: dict[str, object] = {}
+        if isinstance(cancel_state, dict):
+            ranked_edges = sorted(
+                (
+                    (str(edge_id), raw)
+                    for edge_id, raw in cancel_state.items()
+                    if isinstance(raw, dict)
+                ),
+                key=lambda item: (
+                    int(item[1].get("direct_damage_events", 0)),
+                    int(item[1].get("trials", 0)),
+                    item[0],
+                ),
+                reverse=True,
+            )[:128]
+            for edge_id, raw in ranked_edges:
+                cancel_edges[edge_id] = {
+                    "target": [
+                        int(raw.get("target_action", 0)),
+                        int(raw.get("target_sequence", 0)),
+                    ],
+                    "chord": str(raw.get("chord", "")),
+                    "frame_window": [
+                        int(raw.get("minimum_source_frame", 0)),
+                        int(raw.get("maximum_source_frame", 0)),
+                    ],
+                    "trials": int(raw.get("trials", 0)),
+                    "direct_damage_events": int(raw.get("direct_damage_events", 0)),
+                }
         compiled_characters[str(character_key)] = {
             "defense_choices": choices,
             "projectile_extents": projectile_extents,
             "temporal_actions": temporal,
             "offense_choices": offense_choices,
+            "attack_geometry": attack_geometry,
+            "cancel_edges": cancel_edges,
         }
     return output
 

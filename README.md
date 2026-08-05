@@ -18,6 +18,9 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
   campaign.
 - Fighter/action/pose/frame, HP, spirit, facing, velocity, native per-frame
   hurt/attack boxes, and active projectile sensing from read-only process memory.
+- Bounded per-opponent `action/sequence/pose` attack-box learning; future melee
+  active windows are projected from native observations rather than character
+  move-name rules.
 - A C++ finite-horizon projectile evaluator with exact current-frame AABBs,
   projectile and movement acceleration, movement startup, graze windows, and a
   Python parity fallback.
@@ -25,6 +28,9 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
   outcome learning using bounded sufficient statistics and a lightweight
   contextual-bandit explorer rather than a neural network or heavyweight RL
   runtime.
+- Versioned, dimensionless reward over native outcome components, including
+  exchange loss, resource/whiff cost, downside-tail risk, and lightly weighted
+  round credit. Reward changes require recompilation, not recollection.
 - Between-encounter model compilation and bounded gzip telemetry rotation.
 
 The project is research-stage. It is not yet expected to clear Arcade reliably.
@@ -39,10 +45,23 @@ The online loop stays deliberately small:
 3. enumerate a small legal response set and run a short native trajectory forecast;
 4. choose the lowest-risk defense or highest-utility safe punish.
 
+The framework supplies legal inputs and safety constraints, but it does not
+encode matchup tactics. Native geometry removes physically impossible movement
+responses; a contextual outcome learner decides which remaining defense,
+attack, and counter works for each opponent and state. Human demonstrations and
+guide-derived routes are removable cold-start priors, not immutable decisions.
+Accepted offensive transitions are also learned directly from play: an attack
+button rising edge is retained for at most six frames, then bound to the native
+`action/sequence/pose/frame -> action/sequence` transition it actually caused.
+Only observed cancel edges can be replayed, and their continuations are ranked
+by the same damage/self-damage/resource/commitment outcomes as other actions.
+
 At encounter boundaries, cumulative models are atomically written to
 `runtime/th105_opponent_models.json` and compiled into the read-mostly
 `runtime/th105_compiled_policy.json`. Raw telemetry is not a training database:
 it rotates at a fixed size and keeps only a few compressed diagnostic windows.
+The durable data tiers and forward-compatibility contract are specified in
+[`notes/CORPUS_SCHEMA.md`](notes/CORPUS_SCHEMA.md).
 
 ## Running
 
@@ -63,7 +82,7 @@ sparse Z edges so the campaign can continue.
 For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
 `auto-arcade --launch --p1-character sakuya --continuous`. Each completed
 encounter atomically checkpoints its per-opponent model, with an additional
-30-second crash-recovery checkpoint; Ctrl+C restores the input bridge before
+10-second crash-recovery checkpoint; Ctrl+C restores the input bridge before
 exit. Neutral offense uses a bounded contextual bandit: it
 tries short `toward+Z`, `toward+A+Z/X/C`, and rising-Z probes, measures damage,
 self-damage, spirit cost, and commitment, exploits good results, and retains a

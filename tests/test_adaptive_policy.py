@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.policies.adaptive import (
     SELF_PROBE_PATTERNS,
+    SakuyaAdaptivePolicy,
     _bounded_bandit_score,
     _demonstration_frames,
     _demonstration_probe_frames,
@@ -112,6 +113,59 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
             _bounded_bandit_score(model, "untried", "ctx"),
             _bounded_bandit_score(model, "known", "ctx"),
         )
+
+    def test_learned_melee_box_keeps_future_active_delay(self) -> None:
+        policy = SakuyaAdaptivePolicy()
+        geometry = policy.enemy_attack_geometry
+        geometry.observe(0, action_id=305, sequence=0, pose=0, attack_boxes=())
+        geometry.observe(
+            5,
+            action_id=305,
+            sequence=0,
+            pose=1,
+            attack_boxes=((10, -80, 100, 0),),
+        )
+        geometry.observe(6, action_id=0, sequence=0, pose=0, attack_boxes=())
+        geometry.observe(100, action_id=305, sequence=0, pose=0, attack_boxes=())
+        enemy = SimpleNamespace(
+            action_id=305,
+            action_sequence=0,
+            attack_boxes=(),
+            x=500.0,
+            y=0.0,
+            facing=1,
+            velocity_x=0.0,
+            velocity_y=0.0,
+        )
+        observation = SimpleNamespace(frame=100, state=SimpleNamespace(p2=enemy))
+        hazards = policy._enemy_melee_hazards(observation)
+        self.assertEqual(len(hazards), 1)
+        self.assertEqual(hazards[0].active_start_frame, 5)
+        self.assertEqual(hazards[0].active_end_frame, 5)
+        self.assertEqual((hazards[0].half_width, hazards[0].half_height), (45.0, 40.0))
+
+    def test_hot_reload_state_is_newer_than_disk_priors(self) -> None:
+        first = SakuyaAdaptivePolicy()
+        first.enemy_attack_geometry.observe(
+            0,
+            action_id=305,
+            sequence=0,
+            pose=2,
+            attack_boxes=((0, -80, 90, 0),),
+        )
+        first.opponent.observe(
+            0,
+            enemy_action=305,
+            me_hp=10000,
+            projectile_count=0,
+            active_hitbox=True,
+        )
+        second = SakuyaAdaptivePolicy()
+        second.import_state(first.export_state())
+        self.assertIsNotNone(second.enemy_attack_geometry.forecast(305, 0))
+        self.assertIn(305, second.opponent.profiles)
+        self.assertTrue(second.opponent_knowledge_seeded)
+        self.assertTrue(second.attack_geometry_knowledge_seeded)
 
     def test_losing_human_trade_is_not_a_replay_candidate(self) -> None:
         losing = {

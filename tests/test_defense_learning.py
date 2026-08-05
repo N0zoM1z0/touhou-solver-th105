@@ -60,6 +60,24 @@ class DefenseResponseTests(unittest.TestCase):
             (stats.trials, stats.successes, stats.total_guard_cost),
             (1, 1, 100),
         )
+        self.assertEqual(stats.normalized_samples, 1)
+
+    def test_tail_risk_breaks_equal_mean_damage_tie(self) -> None:
+        model = DefenseResponseModel()
+        for damage in (250, 250, 250, 250, 250):
+            model.begin("risk", "steady", hp=10000, spirit=1000, distance=60)
+            model.mark_applied()
+            model.observe(hp=10000 - damage, spirit=1000, distance=50)
+            model.finish()
+        for damage in (0, 0, 0, 0, 1250):
+            model.begin("risk", "tail", hp=10000, spirit=1000, distance=60)
+            model.mark_applied()
+            model.observe(hp=10000 - damage, spirit=1000, distance=50)
+            model.finish()
+        self.assertLess(
+            model.table["risk"]["steady"].loss,
+            model.table["risk"]["tail"].loss,
+        )
 
     def test_unapplied_response_does_not_poison_learning(self) -> None:
         model = DefenseResponseModel()

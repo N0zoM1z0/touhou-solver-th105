@@ -57,11 +57,33 @@ class ModelCompilerTests(unittest.TestCase):
                                 },
                             }
                         },
+                        "attack_geometry": {
+                            "305:0": {
+                                "first_active_elapsed": 4,
+                                "last_active_elapsed": 9,
+                                "active_observations": 12,
+                                "attack_envelope": [-20, -100, 130, 0],
+                                "poses": {"2": {}, "3": {}},
+                            }
+                        },
+                        "cancel_graph": {
+                            "300:0:2|toward+z|305:0": {
+                                "target_action": 305,
+                                "target_sequence": 0,
+                                "chord": "toward+z",
+                                "minimum_source_frame": 2,
+                                "maximum_source_frame": 4,
+                                "trials": 5,
+                                "direct_damage_events": 2,
+                            }
+                        },
                     }
                 },
             }
         )
         character = compiled["characters"]["0x01"]
+        self.assertEqual(compiled["reward_version"], 1)
+        self.assertEqual(compiled["source_schema_version"], 1)
         self.assertEqual(
             character["defense_choices"]["302:0"]["response"], "low_guard"
         )
@@ -70,6 +92,14 @@ class ModelCompilerTests(unittest.TestCase):
         self.assertEqual(
             character["offense_choices"]["close:ground:field:recovery"]["action"],
             "AAAA",
+        )
+        self.assertEqual(
+            character["attack_geometry"]["305:0"]["envelope"],
+            [-20, -100, 130, 0],
+        )
+        self.assertEqual(
+            character["cancel_edges"]["300:0:2|toward+z|305:0"]["target"],
+            [305, 0],
         )
 
 

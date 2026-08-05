@@ -137,6 +137,28 @@ class HazardReferenceTests(unittest.TestCase):
         self.assertEqual(ballistic.final_y, 0.0)
         self.assertLess(ballistic.final_y, linear.final_y)
 
+    def test_delayed_attack_window_allows_preemptive_escape(self) -> None:
+        always = HazardProjectile(0.0, 0.0, 0.0, 0.0, 5.0, 5.0)
+        delayed = HazardProjectile(
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            5.0,
+            5.0,
+            active_start_frame=3,
+            active_end_frame=5,
+        )
+        candidate = (MovementCandidate(-10.0, 0.0),)
+        self.assertFalse(
+            evaluate_paths_reference(0, 0, 5, 5, (always,), candidate, horizon=5)[0].safe
+        )
+        result = evaluate_paths_reference(
+            0, 0, 5, 5, (delayed,), candidate, horizon=5
+        )[0]
+        self.assertTrue(result.safe)
+        self.assertGreater(result.minimum_clearance, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

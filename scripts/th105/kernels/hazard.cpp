@@ -20,6 +20,8 @@ struct Projectile {
     float halfHeight;
     float accelerationX;
     float accelerationY;
+    std::int32_t activeStartFrame;
+    std::int32_t activeEndFrame;
 };
 
 struct Candidate {
@@ -71,13 +73,17 @@ bool finiteProjectile(const Projectile& projectile) {
         && std::isfinite(projectile.accelerationX)
         && std::isfinite(projectile.accelerationY)
         && projectile.halfWidth >= 0.0F
-        && projectile.halfHeight >= 0.0F;
+        && projectile.halfHeight >= 0.0F
+        && projectile.activeStartFrame >= 0
+        && projectile.activeEndFrame >= 0
+        && (projectile.activeEndFrame == 0
+            || projectile.activeEndFrame >= projectile.activeStartFrame);
 }
 
 }  // namespace
 
 TH105_EXPORT std::int32_t th105_hazard_abi_version() {
-    return 6;
+    return 7;
 }
 
 TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
@@ -155,6 +161,10 @@ TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
             for (std::uint32_t projectileIndex = 0;
                  projectileIndex < projectileCount; ++projectileIndex) {
                 const Projectile projectile = projectiles[projectileIndex];
+                if (projectile.activeStartFrame > 0
+                    && frame < projectile.activeStartFrame) continue;
+                if (projectile.activeEndFrame > 0
+                    && frame > projectile.activeEndFrame) continue;
                 const float clearance = signedAabbClearance(
                     x,
                     y,

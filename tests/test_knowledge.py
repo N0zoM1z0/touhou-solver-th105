@@ -3,11 +3,14 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.knowledge import (
+    attack_geometry_for,
+    cancel_graph_for,
     defense_model_for,
     offense_model_for,
     persist_character_models,
@@ -36,6 +39,7 @@ class OpponentKnowledgeTests(unittest.TestCase):
                 }
             }
             persist_profiles(path, "0x12345678", profiles)
+            self.assertEqual(json.loads(path.read_text())["schema_version"], 1)
             loaded = profiles_for(path, "0x12345678")
             model = OpponentActionModel()
             model.seed(loaded)
@@ -61,6 +65,20 @@ class OpponentKnowledgeTests(unittest.TestCase):
                         "AAAA": {"trials": 2, "connections": 2}
                     }
                 },
+                attack_geometry={
+                    "305:0": {
+                        "action_id": 305,
+                        "sequence": 0,
+                        "active_observations": 4,
+                    }
+                },
+                cancel_graph={
+                    "300:0:1|z|305:0": {
+                        "source_action": 300,
+                        "target_action": 305,
+                        "trials": 3,
+                    }
+                },
             )
             self.assertEqual(profiles_for(path, "0xABCDEF00")["500"]["starts"], 2)
             self.assertEqual(
@@ -78,6 +96,18 @@ class OpponentKnowledgeTests(unittest.TestCase):
                     "close:ground:field:recovery"
                 ]["AAAA"]["connections"],
                 2,
+            )
+            self.assertEqual(
+                attack_geometry_for(path, "0xABCDEF00")["305:0"][
+                    "active_observations"
+                ],
+                4,
+            )
+            self.assertEqual(
+                cancel_graph_for(path, "0xABCDEF00")["300:0:1|z|305:0"][
+                    "trials"
+                ],
+                3,
             )
 
     def test_profile_only_update_preserves_projectile_model(self) -> None:
