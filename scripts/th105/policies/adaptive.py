@@ -184,16 +184,43 @@ SKILL_INPUT = {
     "214C": ("214", "c", "setup"),
 }
 
+# Small, bounded neutral probes the agent can evaluate without human corpus.
+# They are deliberately only an approach plus one attack edge: follow-ups are
+# earned later through hit-confirmed combo selection, never blindly committed.
+SELF_PROBE_PATTERNS = {
+    "advance-z": "toward@3,toward+z@2,neutral@4",
+    "advance-az": "toward@3,a+toward+z@2,neutral@4",
+    "advance-ax": "toward@3,a+toward+x@2,neutral@4",
+    "advance-ac": "toward@3,a+toward+c@2,neutral@4",
+    "rising-z": "toward@2,toward+up@2,toward+up+z@2,neutral@4",
+}
 
-def _native_guard_response(attack_flags: int, learned: str) -> str:
-    """Use frame-data guard type when it is unambiguous, else learned prior."""
+
+def _native_guard_response(
+    attack_flags: int,
+    learned: str,
+    *,
+    native_failed: bool = False,
+) -> str:
+    """Use native guard type as a strong prior unless contact disproved it."""
     mid_hit = bool(attack_flags & 0x2)
     low_hit = bool(attack_flags & 0x4)
-    if low_hit and not mid_hit:
+    if low_hit and not mid_hit and not native_failed:
         return "low_guard"
-    if mid_hit and not low_hit:
+    if mid_hit and not low_hit and not native_failed:
         return "high_guard"
     return learned
+
+
+def _response_has_damage(model: object, signature: str, response: str) -> bool:
+    table = getattr(model, "table", {})
+    if not isinstance(table, dict):
+        return False
+    row = table.get(signature, {})
+    if not isinstance(row, dict):
+        return False
+    stats = row.get(response)
+    return int(getattr(stats, "damage_events", 0)) > 0
 
 
 def _demonstration_frames(pattern: str, toward: str) -> list[set[str]]:
@@ -240,6 +267,74 @@ def _pattern_has_advancing_attack(pattern: str) -> bool:
             return True
         toward_recent = max(0, toward_recent - count)
     return False
+
+
+def _demonstration_probe_frames(pattern: str, toward: str) -> list[set[str]]:
+    """Extract only the short approach/attack edge from a full demonstration."""
+    frames = _demonstration_frames(pattern, toward)
+    recent_toward: deque[int] = deque(maxlen=6)
+    attack_index: int | None = None
+    for index, keys in enumerate(frames):
+        if toward in keys:
+            recent_toward.append(index)
+        if keys & {"z", "x", "c"} and (
+            toward in keys or (recent_toward and index - recent_toward[-1] <= 6)
+        ):
+            attack_index = index
+            break
+    if attack_index is None:
+        return []
+    start = max(0, attack_index - 6)
+    while start < attack_index and toward not in frames[start]:
+        start += 1
+    end = attack_index + 1
+    while end < len(frames) and frames[end] & {"z", "x", "c"}:
+        end += 1
+    probe = frames[start:min(len(frames), end + 2)][:12]
+    return probe if any(keys & {"z", "x", "c"} for keys in probe) else []
+
+
+def _bounded_bandit_score(
+    model: object,
+    label: str,
+    context: str,
+    *,
+    prior_score: float = 0.0,
+) -> float:
+    """Cheap optimistic score over bounded sufficient statistics.
+
+    Every untried candidate is sampled once. Afterwards the score combines
+    actual damage/trade/resource utility with a shrinking UCB exploration
+    bonus. Storage grows with contexts x candidates, not with match length.
+    """
+    table = getattr(model, "table", {})
+    row = table.get(context, {}) if isinstance(table, dict) else {}
+    row = row if isinstance(row, dict) else {}
+    stats = row.get(label)
+    trials = int(getattr(stats, "trials", 0))
+    bounded_prior = max(-200.0, min(250.0, prior_score * 0.15))
+    if trials <= 0:
+        return 2000.0 + bounded_prior
+    average_damage = float(getattr(stats, "average_damage", 0.0))
+    average_self = float(getattr(stats, "average_self_damage", 0.0))
+    spirit_cost = float(getattr(stats, "total_spirit_cost", 0.0)) / trials
+    commitment = float(getattr(stats, "total_commitment", 0.0)) / trials
+    utility = average_damage - 1.5 * average_self - 0.2 * spirit_cost - 2.0 * commitment
+    total_trials = sum(int(getattr(value, "trials", 0)) for value in row.values())
+    exploration = 450.0 * math.sqrt(math.log(max(2, total_trials + 2)) / trials)
+    return utility + exploration + bounded_prior
+
+
+def _probe_is_empirically_unsafe(model: object, label: str, context: str) -> bool:
+    """Stop repeating a probe whose observed trade is clearly losing."""
+    stats = getattr(model, "stats_for", lambda *_: None)(label, context)
+    if stats is None or int(getattr(stats, "trials", 0)) < 2:
+        return False
+    trials = max(1, int(getattr(stats, "trials", 0)))
+    punished_rate = float(getattr(stats, "punished_trials", 0)) / trials
+    damage = float(getattr(stats, "average_damage", 0.0))
+    self_damage = float(getattr(stats, "average_self_damage", 0.0))
+    return punished_rate >= 0.6 and self_damage > max(250.0, damage * 0.8)
 
 
 class SakuyaAdaptivePolicy:
@@ -519,6 +614,114 @@ class SakuyaAdaptivePolicy:
             "queued_frames": len(frames),
         }
         return self.queue.popleft(), f"human-punish:{signature}"
+
+    def _start_human_probe(
+        self,
+        observation: PolicyObservation,
+        toward: str,
+    ) -> tuple[set[str], str] | None:
+        """Try one learned advancing attack, never a full neutral-state chain."""
+        me, enemy = observation.state.p1, observation.state.p2
+        context = combat_context(
+            distance=abs(enemy.x - me.x),
+            enemy_y=enemy.y,
+            enemy_x=enemy.x,
+            phase="neutral",
+        )
+        contexts = self.human_demonstrations.get("contexts", {})
+        contexts = contexts if isinstance(contexts, dict) else {}
+        candidates = contexts.get(context, ())
+        candidates = candidates if isinstance(candidates, list) else ()
+        spirit = int(getattr(me, "spirit", 1000))
+        viable: list[tuple[float, str, str, str, int, str, str]] = []
+        for candidate in candidates[:8]:
+            if not isinstance(candidate, dict):
+                continue
+            pattern = str(candidate.get("pattern", ""))
+            trials = max(1, int(candidate.get("trials", 0)))
+            connections = int(candidate.get("connections", 0))
+            average_damage = float(candidate.get("average_damage", 0.0))
+            average_self = float(candidate.get("average_self_damage", 0.0))
+            average_spirit = float(candidate.get("average_spirit", 0.0))
+            if (
+                not _pattern_has_advancing_attack(pattern)
+                or connections / trials < 0.6
+                or average_damage <= 0.0
+                or average_self > max(50.0, average_damage * 0.15)
+                or average_spirit > max(0, spirit - 200)
+            ):
+                continue
+            probe = _demonstration_probe_frames(pattern, toward)
+            if not probe:
+                continue
+            signature = str(candidate.get("signature", ""))
+            pattern_id = str(candidate.get("pattern_id", "legacy"))
+            label = f"human-probe:{signature}:{pattern_id}"
+            if _probe_is_empirically_unsafe(self.offense_outcomes, label, context):
+                continue
+            score = _bounded_bandit_score(
+                self.offense_outcomes,
+                label,
+                context,
+                prior_score=float(candidate.get("score", 0.0)),
+            )
+            viable.append(
+                (
+                    score,
+                    signature,
+                    pattern_id,
+                    pattern,
+                    connections,
+                    label,
+                    "human-seed",
+                )
+            )
+        for name, pattern in SELF_PROBE_PATTERNS.items():
+            label = f"self-probe:{name}"
+            if _probe_is_empirically_unsafe(self.offense_outcomes, label, context):
+                continue
+            viable.append(
+                (
+                    _bounded_bandit_score(self.offense_outcomes, label, context),
+                    name,
+                    name,
+                    pattern,
+                    0,
+                    label,
+                    "autonomous",
+                )
+            )
+        if not viable:
+            return None
+        score, signature, pattern_id, pattern, connections, label, source = max(viable)
+        frames = _demonstration_probe_frames(pattern, toward)
+        self.queue.extend(frames)
+        self.offense_outcomes.begin(
+            label,
+            context,
+            frame=observation.frame,
+            commitment=len(frames) + 12,
+            enemy_hp=enemy.hp,
+            me_hp=me.hp,
+            spirit=spirit,
+        )
+        self.combo_target_hp = enemy.hp
+        self.combo_confirm_deadline = observation.frame + min(16, len(frames) + 4)
+        self.attack_cooldown = 90
+        counter_family = "human_probe_attempts" if source == "human-seed" else "self_probe_attempts"
+        self.counts[f"{counter_family}:{signature}:{pattern_id}"] += 1
+        self.last_human_demonstration = {
+            "frame": observation.frame,
+            "context": context,
+            "signature": signature,
+            "pattern_id": pattern_id,
+            "score": score,
+            "connections": connections,
+            "queued_frames": len(frames),
+            "probe": True,
+            "source": source,
+        }
+        return self.queue.popleft(), f"{source}-probe:{signature}"
 
     def _safe_to_commit_skill(
         self,
@@ -981,7 +1184,17 @@ class SakuyaAdaptivePolicy:
                 self.defense_responses.episode.response
                 if self.defense_responses.episode is not None else "high_guard"
             )
-            response = _native_guard_response(enemy_attack_flags, response)
+            native_response = _native_guard_response(enemy_attack_flags, response)
+            native_failed = _response_has_damage(
+                self.defense_responses, melee_signature or "", native_response
+            )
+            response = _native_guard_response(
+                enemy_attack_flags,
+                response,
+                native_failed=native_failed,
+            )
+            if native_failed:
+                self.counts[f"native_guard_overridden:{melee_signature}"] += 1
             mark_applied = getattr(self.defense_responses, "mark_applied", None)
             if callable(mark_applied):
                 mark_applied()
@@ -1020,7 +1233,18 @@ class SakuyaAdaptivePolicy:
                 self.defense_responses.episode.response
                 if self.defense_responses.episode is not None else "high_guard"
             )
-            response = _native_guard_response(enemy_attack_flags, response)
+            signature = (
+                self.defense_responses.episode.signature
+                if self.defense_responses.episode is not None else ""
+            )
+            native_response = _native_guard_response(enemy_attack_flags, response)
+            response = _native_guard_response(
+                enemy_attack_flags,
+                response,
+                native_failed=_response_has_damage(
+                    self.defense_responses, signature, native_response
+                ),
+            )
             low = response == "low_guard"
             keys = {back, "down"} if low else {back}
             intent = "guard-chain-low" if low else "guard-chain-high"
@@ -1121,6 +1345,21 @@ class SakuyaAdaptivePolicy:
             intent = "soft-punish-probe"
             self.attack_cooldown = 18
             self.counts["soft_punish_probes"] += 1
+        elif (
+            self.attack_cooldown == 0
+            and me.action_id < 50
+            and me.y < 8.0
+            and 60.0 <= distance < 260.0
+            and self.last_assessment.phase == "neutral"
+            and not hazards
+        ):
+            selected = self._start_human_probe(observation, toward)
+            if selected is None:
+                keys = {toward} if distance >= 150.0 else {back}
+                intent = "human-probe-unavailable"
+                self.attack_cooldown = 24
+            else:
+                keys, intent = selected
         elif distance > 310:
             if spirit < 400:
                 keys = {back}
@@ -1292,6 +1531,16 @@ class SakuyaAdaptivePolicy:
                     count
                     for name, count in self.counts.items()
                     if name.startswith("human_demo_attempts:")
+                ),
+                "probes": sum(
+                    count
+                    for name, count in self.counts.items()
+                    if name.startswith("human_probe_attempts:")
+                ),
+                "autonomous_probes": sum(
+                    count
+                    for name, count in self.counts.items()
+                    if name.startswith("self_probe_attempts:")
                 ),
                 "last_selected": self.last_human_demonstration or None,
             },

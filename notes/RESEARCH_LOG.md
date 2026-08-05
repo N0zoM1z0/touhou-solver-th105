@@ -236,3 +236,24 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   strings and built-in grounded combos retain their close-range gates. This
   exposes Sakuya's advancing attacks without turning mid-range recovery guesses
   into blind combo commitments.
+- **Observed/implemented** full demonstrated chains could not create their own
+  first hit because they were correctly gated behind confirmed reaction. A
+  neutral-state replay now extracts only the bounded approach/attack edge. In
+  live Easy Arcade this selected Sakuya action `418` and reduced Marisa from
+  10000 to 8636 without committing the remainder of the human chain.
+- **Implemented** neutral exploration no longer depends on human data. Five
+  short facing-relative probes (`toward+Z`, `toward+A+Z/X/C`, and rising-Z) join
+  demonstrated candidates in a per-context UCB-style bandit. Reward combines
+  enemy damage, 1.5x self-damage penalty, spirit cost, and commitment; every
+  bounded candidate is sampled optimistically, while repeatedly losing trades
+  are retired. Online state remains fixed-size sufficient statistics per
+  opponent/context/candidate.
+- **Observed/implemented** native mid/low attack flags are strong guard priors,
+  not infallible labels. When a response has taken real damage for an exact
+  action/sequence signature, the learned alternative may override the native
+  prior. This addresses repeated Youmu pressure where a nominal high guard lost
+  724 and 531 HP on separate episodes.
+- **Implemented** `auto-arcade --continuous` and
+  `run_th105_overnight.bat` provide an unattended curriculum. Encounter
+  boundaries checkpoint and compile cumulative per-opponent timing, projectile,
+  defense, and offense aggregates; bounded telemetry continues rotating.

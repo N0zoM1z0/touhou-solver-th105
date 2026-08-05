@@ -21,8 +21,9 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
 - A C++ finite-horizon projectile evaluator with exact current-frame AABBs,
   acceleration, movement startup, graze windows, and a Python parity fallback.
 - Per-opponent action timing, projectile envelope, guard response, and offense
-  outcome learning using bounded sufficient statistics rather than a neural
-  network or heavyweight RL runtime.
+  outcome learning using bounded sufficient statistics and a lightweight
+  contextual-bandit explorer rather than a neural network or heavyweight RL
+  runtime.
 - Between-encounter model compilation and bounded gzip telemetry rotation.
 
 The project is research-stage. It is not yet expected to clear Arcade reliably.
@@ -57,6 +58,15 @@ bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Pass `--foreground-only` to restore
 strict foreground ownership. Round-end and Arcade dialogue screens receive
 sparse Z edges so the campaign can continue.
+
+For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
+`auto-arcade --launch --p1-character sakuya --continuous`. Each completed
+encounter atomically checkpoints its per-opponent model; Ctrl+C restores the
+input bridge before exit. Neutral offense uses a bounded contextual bandit: it
+tries short `toward+Z`, `toward+A+Z/X/C`, and rising-Z probes, measures damage,
+self-damage, spirit cost, and commitment, exploits good results, and retains a
+shrinking exploration bonus. This works without a human corpus; demonstrations
+only improve cold-start ordering.
 
 The resident controller hot-reloads `scripts/th105/policies/adaptive.py` every
 30 combat frames. A bad edit keeps the last known-good generation. Compact live

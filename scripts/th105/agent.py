@@ -430,8 +430,12 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     p1_character=args.p1_character,
                 )
             )
-        if args.battle_seconds > 0:
-            deadline = time.perf_counter() + args.battle_seconds
+        if args.battle_seconds > 0 or args.continuous:
+            deadline = (
+                float("inf")
+                if args.continuous
+                else time.perf_counter() + args.battle_seconds
+            )
             encounters: list[dict[str, object]] = []
             transitions: list[dict[str, int | str]] = []
             last_scene = scene_id(reader)
@@ -517,6 +521,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 "encounters": encounters,
                 "transitions": transitions,
                 "requested_seconds": args.battle_seconds,
+                "continuous": args.continuous,
             }
         print(
             json.dumps(
@@ -619,7 +624,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--launch", action="store_true")
     p.add_argument("--timeout", type=float, default=15.0)
     p.add_argument("--p1-character", choices=CHARACTERS, default="sakuya")
-    p.add_argument("--battle-seconds", type=float, default=0.0)
+    duration = p.add_mutually_exclusive_group()
+    duration.add_argument("--battle-seconds", type=float, default=0.0)
+    duration.add_argument(
+        "--continuous",
+        action="store_true",
+        help="keep starting Arcade runs and learning until interrupted",
+    )
     p.add_argument("--frame-hz", type=float, default=60.0)
     p.add_argument("--policy", choices=("adaptive", "bootstrap"), default="adaptive")
     p.add_argument(

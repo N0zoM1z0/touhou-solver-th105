@@ -8,12 +8,16 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.policies.adaptive import (
+    SELF_PROBE_PATTERNS,
+    _bounded_bandit_score,
     _demonstration_frames,
+    _demonstration_probe_frames,
     _hazard_projectiles,
     _human_demonstration_utility,
     _pattern_has_advancing_attack,
     _native_guard_response,
 )
+from th105.offense_learning import ActionOutcomeModel
 
 
 class AdaptiveNativeGeometryTests(unittest.TestCase):
@@ -47,6 +51,16 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertEqual(_native_guard_response(0x4, "high_guard"), "low_guard")
         self.assertEqual(_native_guard_response(0x6, "high_guard"), "high_guard")
 
+    def test_real_damage_can_override_native_guard_prior(self) -> None:
+        self.assertEqual(
+            _native_guard_response(0x2, "low_guard", native_failed=True),
+            "low_guard",
+        )
+        self.assertEqual(
+            _native_guard_response(0x4, "backdash", native_failed=True),
+            "backdash",
+        )
+
     def test_human_pattern_replays_relative_to_current_facing(self) -> None:
         frames = _demonstration_frames(
             "down@1,down+toward@2,toward+x@1,neutral@2", "left"
@@ -65,6 +79,39 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertTrue(_pattern_has_advancing_attack("toward@3,up+z@2"))
         self.assertFalse(_pattern_has_advancing_attack("back@3,x@2"))
         self.assertFalse(_pattern_has_advancing_attack("toward@8,z@2"))
+
+    def test_neutral_probe_extracts_only_approach_attack_edge(self) -> None:
+        frames = _demonstration_probe_frames(
+            "back@5,toward@3,a+toward+x@3,neutral@8", "right"
+        )
+        self.assertTrue(frames)
+        self.assertLessEqual(len(frames), 12)
+        self.assertNotIn("left", set().union(*frames))
+        self.assertIn({"a", "right", "x"}, frames)
+
+    def test_autonomous_probes_are_short_bounded_attacks(self) -> None:
+        for pattern in SELF_PROBE_PATTERNS.values():
+            frames = _demonstration_probe_frames(pattern, "right")
+            self.assertTrue(frames)
+            self.assertLessEqual(len(frames), 12)
+            self.assertTrue(any(keys & {"z", "x", "c"} for keys in frames))
+
+    def test_bandit_samples_untried_probe_before_known_probe(self) -> None:
+        model = ActionOutcomeModel()
+        model.begin(
+            "known",
+            "ctx",
+            frame=0,
+            commitment=1,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
+        )
+        model.observe(frame=1, enemy_hp=9000, me_hp=10000, spirit=1000)
+        self.assertGreater(
+            _bounded_bandit_score(model, "untried", "ctx"),
+            _bounded_bandit_score(model, "known", "ctx"),
+        )
 
     def test_losing_human_trade_is_not_a_replay_candidate(self) -> None:
         losing = {
