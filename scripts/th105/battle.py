@@ -394,6 +394,7 @@ def run_adaptive_fight(
     frame_hz: float = 60.0,
     policy_path: Path | None = None,
     telemetry_path: Path | None = None,
+    difficulty: str = "unknown",
 ) -> dict[str, int | float | str | object]:
     """Sense/actuate shell around a fail-safe hot-reloadable combat policy."""
     if seconds <= 0 or frame_hz <= 0:
@@ -405,6 +406,7 @@ def run_adaptive_fight(
     next_tick = time.perf_counter()
     frames = guard_frames = projectile_guard_frames = decision_frames = 0
     round_end_frames = 0
+    round_wins = round_losses = round_draws = 0
     terminal_reported = False
     last_enemy_projectiles: tuple[ProjectileState, ...] = ()
     last_own_projectiles: tuple[ProjectileState, ...] = ()
@@ -420,29 +422,38 @@ def run_adaptive_fight(
         telemetry_path.with_name("th105_opponent_models.json")
         if telemetry_path is not None else None
     )
-    opponent_key = f"0x{state.p2.vtable:08X}"
+    base_opponent_key = f"0x{state.p2.vtable:08X}"
+    opponent_key = f"{base_opponent_key}@{difficulty.casefold()}"
+    # Old checkpoints were difficulty-agnostic. They remain useful priors, but
+    # all new observations are stored under a difficulty-specific key so the
+    # CPU's distinct timing distributions do not get averaged together.
+    def contextual_prior(loader):
+        return loader(knowledge_path, opponent_key) or loader(
+            knowledge_path, base_opponent_key
+        )
+
     prior_opponent_model = (
-        profiles_for(knowledge_path, opponent_key)
+        contextual_prior(profiles_for)
         if knowledge_path is not None else {}
     )
     prior_projectile_model = (
-        projectile_model_for(knowledge_path, opponent_key)
+        contextual_prior(projectile_model_for)
         if knowledge_path is not None else {}
     )
     prior_defense_model = (
-        defense_model_for(knowledge_path, opponent_key)
+        contextual_prior(defense_model_for)
         if knowledge_path is not None else {}
     )
     prior_offense_model = (
-        offense_model_for(knowledge_path, opponent_key)
+        contextual_prior(offense_model_for)
         if knowledge_path is not None else {}
     )
     prior_attack_geometry = (
-        attack_geometry_for(knowledge_path, opponent_key)
+        contextual_prior(attack_geometry_for)
         if knowledge_path is not None else {}
     )
     prior_cancel_graph = (
-        cancel_graph_for(knowledge_path, opponent_key)
+        contextual_prior(cancel_graph_for)
         if knowledge_path is not None else {}
     )
     prior_human_demonstrations: dict[str, object] = {}
@@ -457,7 +468,7 @@ def run_adaptive_fight(
         prior_human_demonstrations = compiled_demonstrations_for(
             human_compiled,
             f"0x{state.p1.vtable:08X}",
-            opponent_key,
+            base_opponent_key,
         )
 
     telemetry = BoundedJsonlWriter(telemetry_path) if telemetry_path is not None else None
@@ -539,7 +550,13 @@ def run_adaptive_fight(
 
     emit(
         "encounter-start",
-        {"initial": initial, "plugin": plugin.status(), "frame_hz": frame_hz},
+        {
+            "initial": initial,
+            "plugin": plugin.status(),
+            "frame_hz": frame_hz,
+            "difficulty": difficulty,
+            "opponent": opponent_key,
+        },
     )
 
     while time.perf_counter() < deadline:
@@ -573,6 +590,12 @@ def run_adaptive_fight(
                         "spirit": me.spirit,
                     }
                 )
+                if won is True:
+                    round_wins += 1
+                elif won is False:
+                    round_losses += 1
+                else:
+                    round_draws += 1
                 terminal_reported = True
             # Z rising edges advance round-result text and post-fight dialogue.
             # Keep them sparse so one edge cannot leak through several screens.
@@ -687,6 +710,11 @@ def run_adaptive_fight(
         "nearest_enemy_projectile": nearest_enemy_projectile,
         "last_intent": last_intent,
         "round_end_frames": round_end_frames,
+        "round_wins": round_wins,
+        "round_losses": round_losses,
+        "round_draws": round_draws,
+        "difficulty": difficulty,
+        "opponent": opponent_key,
         "seconds": seconds,
         "stop_reason": reason,
         "initial": initial,

@@ -888,16 +888,26 @@ class SakuyaAdaptivePolicy:
         label: str,
         distance: float,
         commitment: float | None = None,
+        startup: float | None = None,
     ) -> bool:
         """Reject casts whose startup/recovery window is already punishable."""
         me, enemy = observation.state.p1, observation.state.p2
         horizon = int(commitment or SKILL_COMMIT_FRAMES[label])
 
-        # Starting a special while the opponent is already attacking is only
-        # justified by a later, explicitly modelled invulnerability/graze case.
-        if 300 <= enemy.action_id < 700:
+        # An offensive action ID is not automatically dangerous for its whole
+        # animation. Permit a cast in a learned, high-confidence recovery only
+        # when its startup fits inside the observed punish window.
+        required_startup = float(startup or SKILL_FALLBACK_STARTUP[label]) + 2.0
+        learned_recovery_window = (
+            self.last_assessment.phase == "recovery"
+            and self.last_assessment.confidence >= 0.75
+            and self.last_assessment.punish_window >= required_startup
+        )
+        if 300 <= enemy.action_id < 700 and not learned_recovery_window:
             self.counts[f"commit_reject_enemy_action:{label}"] += 1
             return False
+        if learned_recovery_window:
+            self.counts[f"commit_allow_learned_recovery:{label}"] += 1
         closing_speed = max(0.0, abs(enemy.velocity_x) + abs(me.velocity_x))
         if distance - closing_speed * min(horizon, 18) < 150.0:
             self.counts[f"commit_reject_melee:{label}"] += 1
@@ -1623,7 +1633,15 @@ class SakuyaAdaptivePolicy:
             elif (
                 self.skill_cooldown == 0
                 and me.action_id < 50
-                and self.last_assessment.phase in {"reaction", "recovery"}
+                and (
+                    self.last_assessment.phase in {"reaction", "recovery"}
+                    or (
+                        self.last_assessment.phase == "neutral"
+                        and me.hp >= int(getattr(me, "max_hp", 10000) * 0.55)
+                        and spirit >= 500
+                        and distance >= 420.0
+                    )
+                )
             ):
                 # Guide-derived roles: 236 is fast head-on control, 214 is a
                 # persistent bounce wall useful before the opponent advances.
@@ -1659,6 +1677,31 @@ class SakuyaAdaptivePolicy:
                     tuple(self._skill_candidate(label) for label in SKILL_INPUT),
                     tactical_context,
                 )
+                skill_outcome_context = combat_context(
+                    distance=distance,
+                    enemy_y=enemy.y,
+                    enemy_x=enemy.x,
+                    phase=self.last_assessment.phase,
+                )
+                learned_scores = {
+                    item.candidate.name: _bounded_bandit_score(
+                        self.offense_outcomes,
+                        item.candidate.name,
+                        skill_outcome_context,
+                    )
+                    for item in ranked
+                    if item.reason == "ok"
+                }
+                ranked = tuple(
+                    sorted(
+                        ranked,
+                        key=lambda item: (
+                            item.score
+                            + 0.5 * learned_scores.get(item.candidate.name, 0.0)
+                        ),
+                        reverse=True,
+                    )
+                )
                 self.last_tactical_scores = [
                     {
                         "name": item.candidate.name,
@@ -1667,6 +1710,11 @@ class SakuyaAdaptivePolicy:
                         "reason": item.reason,
                         "startup": item.candidate.startup,
                         "commitment": item.candidate.commitment,
+                        "learned_score": learned_scores.get(item.candidate.name),
+                        "combined_score": (
+                            item.score
+                            + 0.5 * learned_scores.get(item.candidate.name, 0.0)
+                        ),
                     }
                     for item in ranked
                 ]
@@ -1697,7 +1745,11 @@ class SakuyaAdaptivePolicy:
                     label = chosen.candidate.name
                     motion, button, _role = SKILL_INPUT[label]
                 if chosen is not None and self._safe_to_commit_skill(
-                    observation, label, distance, chosen.candidate.commitment
+                    observation,
+                    label,
+                    distance,
+                    chosen.candidate.commitment,
+                    chosen.candidate.startup,
                 ):
                     self.skill_index += 1
                     self.queue.extend(build_motion_frames(motion, button, toward))
@@ -1707,12 +1759,7 @@ class SakuyaAdaptivePolicy:
                     self.counts[f"skill_attempts:{label}"] += 1
                     self.offense_outcomes.begin(
                         label,
-                        combat_context(
-                            distance=distance,
-                            enemy_y=enemy.y,
-                            enemy_x=enemy.x,
-                            phase=self.last_assessment.phase,
-                        ),
+                        skill_outcome_context,
                         frame=observation.frame,
                         commitment=int(chosen.candidate.commitment) + 12,
                         enemy_hp=enemy.hp,

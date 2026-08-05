@@ -1,7 +1,7 @@
 # touhou-solver-th105
 
 An experimental, explainable autoplay engine for Touhou 10.5 / Scarlet Weather
-Rhapsody. It launches and navigates an Easy Arcade campaign with Sakuya, senses
+Rhapsody. It launches and navigates Arcade campaigns with Sakuya, senses
 native combat state, drives the game through a reversible background DirectInput
 bridge, and learns compact per-character offense and defense models from play.
 
@@ -11,7 +11,8 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
 
 ## Current capabilities
 
-- Native scene validation and Easy Arcade/Sakuya menu navigation.
+- Native scene validation, Sakuya menu navigation, and fixed or automatically
+  promoted `Easy/Normal/Hard/Lunatic` CPU difficulty.
 - Background-capable injected input with exact-byte validation, orphan recovery,
   key release on exit, and post-cleanup verification.
 - Hot-reloadable combat policy; a bad generation rolls back without stopping the
@@ -45,6 +46,12 @@ The online loop stays deliberately small:
 3. enumerate a small legal response set and run a short native trajectory forecast;
 4. choose the lowest-risk defense or highest-utility safe punish.
 
+Offense and defense keep separate outcome models. A native-state tactical gate
+decides whether the present frame is a confirmed threat, punish window, or
+neutral state; the corresponding learner chooses the response and timing. CPU
+difficulty is part of the opponent model key, so faster Hard/Lunatic behavior
+does not get averaged into Easy timing statistics.
+
 The framework supplies legal inputs and safety constraints, but it does not
 encode matchup tactics. Native geometry removes physically impossible movement
 responses; a contextual outcome learner decides which remaining defense,
@@ -73,7 +80,10 @@ run_th105_auto_arcade.bat
 ```
 
 The launcher is equivalent to
-`auto-arcade --launch --p1-character sakuya --battle-seconds 300`. The injected
+`auto-arcade --launch --p1-character sakuya --battle-seconds 300`. The default
+`--difficulty curriculum` promotes one level after sustained wins and demotes
+one level after sustained losses; pass `--difficulty easy`, `normal`, `hard`, or
+`lunatic` for a fixed campaign. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Pass `--foreground-only` to restore
 strict foreground ownership. Round-end and Arcade dialogue screens receive
@@ -88,6 +98,11 @@ tries short `toward+Z`, `toward+A+Z/X/C`, and rising-Z probes, measures damage,
 self-damage, spirit cost, and commitment, exploits good results, and retains a
 shrinking exploration bonus. This works without a human corpus; demonstrations
 only improve cold-start ordering.
+
+Training permits bounded skill probes in safe far-neutral states and during a
+learned enemy recovery window long enough to cover the move's startup. The same
+native projectile forecast and resource checks remain active, while observed
+punishes down-rank bad probes automatically.
 
 The resident controller hot-reloads `scripts/th105/policies/adaptive.py` every
 30 combat frames. A bad edit keeps the last known-good generation. Compact live

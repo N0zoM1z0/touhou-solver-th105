@@ -7,6 +7,7 @@ from typing import Protocol
 
 from .constants import (
     ADDR_CURRENT_ENGINE_SCENE,
+    ADDR_CPU_DIFFICULTY,
     ADDR_GAME_MODE,
     ADDR_SCENE_CONTROLLER,
     GAME_MODE_ARCADE,
@@ -20,6 +21,7 @@ from .win32 import ProcessReader
 MAIN_MENU_ITEMS = 12
 MAIN_MENU_PRACTICE = 5
 MAIN_MENU_ARCADE = 1
+MAIN_MENU_CONFIG = 10
 MAIN_MENU_SELECTION_OFFSET = 540
 MAIN_MENU_VTABLE = 0x006ACCF4
 
@@ -67,6 +69,7 @@ SELECT_P1_CURSOR_OFFSET = 0x10C
 SELECT_P1_CHARACTER_OFFSET = 0x110
 SELECT_P2_CURSOR_OFFSET = 0x134
 SELECT_P2_CHARACTER_OFFSET = 0x138
+DIFFICULTIES = ("easy", "normal", "hard", "lunatic")
 
 
 class MenuKeyboard(Protocol):
@@ -83,6 +86,71 @@ def scene_id(reader: ProcessReader) -> int:
 
 def game_mode(reader: ProcessReader) -> int:
     return reader.u32(ADDR_GAME_MODE)
+
+
+def cpu_difficulty(reader: ProcessReader) -> int:
+    value = reader.u32(ADDR_CPU_DIFFICULTY)
+    if value >= len(DIFFICULTIES):
+        raise RuntimeError(f"invalid CPU difficulty {value}")
+    return value
+
+
+def configure_cpu_difficulty(
+    reader: ProcessReader,
+    keyboard: MenuKeyboard,
+    difficulty: str,
+) -> list[dict[str, int | str]]:
+    """Change Config row 0 through UI and validate the native config value."""
+    try:
+        target = DIFFICULTIES.index(difficulty.casefold())
+    except ValueError as exc:
+        raise ValueError(f"unsupported CPU difficulty {difficulty!r}") from exc
+    current = cpu_difficulty(reader)
+    if current == target:
+        return []
+    history = select_main_menu_item(reader, keyboard, MAIN_MENU_CONFIG)
+    before_scene = scene_id(reader)
+    keyboard.tap("z", hold_ms=75, gap_ms=500)
+    if scene_id(reader) != SCENE_MAIN_MENU:
+        raise RuntimeError("Config unexpectedly left the main-menu scene")
+    history.append({"key": "z", "before": before_scene, "after": scene_id(reader)})
+
+    # Config opens on row 0. Choose the shorter wraparound direction and verify
+    # every edge against CGameConfig+0x64 rather than trusting screen timing.
+    for _ in range(len(DIFFICULTIES)):
+        current = cpu_difficulty(reader)
+        if current == target:
+            break
+        right_distance = (target - current) % len(DIFFICULTIES)
+        left_distance = (current - target) % len(DIFFICULTIES)
+        key = "right" if right_distance <= left_distance else "left"
+        keyboard.tap(key, hold_ms=70, gap_ms=220)
+        after = cpu_difficulty(reader)
+        history.append(
+            {
+                "key": key,
+                "before": current,
+                "after": after,
+                "difficulty": DIFFICULTIES[after],
+            }
+        )
+        if after == current:
+            raise RuntimeError("Config difficulty input did not change native value")
+    if cpu_difficulty(reader) != target:
+        raise RuntimeError(f"failed to select CPU difficulty {difficulty}")
+    keyboard.tap("x", hold_ms=60, gap_ms=500)
+    # Closing Config returns ownership to the regular main-menu controller.
+    # Reading its selector gives us a native-state acknowledgement of the exit.
+    main_menu_selection(reader)
+    history.append(
+        {
+            "key": "x",
+            "before": target,
+            "after": cpu_difficulty(reader),
+            "difficulty": DIFFICULTIES[cpu_difficulty(reader)],
+        }
+    )
+    return history
 
 
 def scene_controller(reader: ProcessReader) -> int:
@@ -282,8 +350,8 @@ def enter_arcade_battle(
 
     history.extend(select_p1_character(reader, keyboard, p1_character))
 
-    # Arcade mode 1 uses the selection controller for character/deck setup;
-    # difficulty is initialized to 0 (Easy) by main_menu_update for index 1.
+    # Arcade mode 1 uses the selection controller for character/deck setup.
+    # CPU difficulty comes from CGameConfig+0x64 and is configured separately.
     for _ in range(6):
         before = scene_id(reader)
         if before != SCENE_SELECT:

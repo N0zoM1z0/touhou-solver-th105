@@ -20,6 +20,7 @@ from .injected_input import InjectedInputBridge, InjectedKeyboard
 from .injected_input import HOOK_ADDRESS, HOOK_ORIGINAL
 from .human_learning import HumanDemonstrationRecorder, compile_human_file
 from .combo import parse_combo, play_combo
+from .difficulty import DifficultyCurriculum
 from .battle import (
     battle_state_json,
     inspect_frame_boxes,
@@ -30,6 +31,9 @@ from .battle import (
 )
 from .menu import (
     CHARACTERS,
+    DIFFICULTIES,
+    configure_cpu_difficulty,
+    cpu_difficulty,
     enter_arcade_battle,
     game_mode,
     main_menu_selection,
@@ -117,6 +121,10 @@ def probe(args: argparse.Namespace) -> int:
             "scene_vtable": f"0x{reader.u32(controller):08X}" if controller else None,
             "input_hook_bytes": reader.read(0x00408218, 5).hex(" "),
             "game_mode": game_mode(reader),
+            "cpu_difficulty": {
+                "index": cpu_difficulty(reader),
+                "name": DIFFICULTIES[cpu_difficulty(reader)],
+            },
             "main_menu_selection": (
                 main_menu_selection(reader) if scene_id(reader) == 2 else None
             ),
@@ -385,6 +393,7 @@ def fight(args: argparse.Namespace) -> int:
                 frame_hz=args.frame_hz,
                 policy_path=args.policy_plugin,
                 telemetry_path=args.telemetry_path,
+                difficulty=DIFFICULTIES[cpu_difficulty(reader)],
             )
         else:
             result = run_bootstrap_fight(
@@ -418,10 +427,27 @@ def auto_arcade(args: argparse.Namespace) -> int:
         verify_reader(reader, target_path(args.game_dir))
         api.focus(pid, args.timeout)
         keyboard.release_all(require_foreground=True)
+        curriculum = DifficultyCurriculum(cpu_difficulty(reader))
+        active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
         if scene_id(reader) == 5 and game_mode(reader) == 1:
-            history = [{"event": "resume-live-arcade", "scene": 5}]
+            history = [
+                {
+                    "event": "resume-live-arcade",
+                    "scene": 5,
+                    "difficulty": active_difficulty,
+                }
+            ]
         else:
             history = reach_main_menu(reader, keyboard, timeout=args.timeout)
+            requested_difficulty = (
+                curriculum.choose()
+                if args.difficulty == "curriculum"
+                else args.difficulty
+            )
+            history.extend(
+                configure_cpu_difficulty(reader, keyboard, requested_difficulty)
+            )
+            active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
             history.extend(
                 enter_arcade_battle(
                     reader,
@@ -463,6 +489,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 frame_hz=args.frame_hz,
                                 policy_path=args.policy_plugin,
                                 telemetry_path=args.telemetry_path,
+                                difficulty=active_difficulty,
                             )
                         else:
                             encounter = run_bootstrap_fight(
@@ -493,6 +520,11 @@ def auto_arcade(args: argparse.Namespace) -> int:
                         )
                         continue
                     encounters.append(dict(encounter))
+                    curriculum.record(
+                        wins=int(encounter.get("round_wins", 0)),
+                        losses=int(encounter.get("round_losses", 0)),
+                        draws=int(encounter.get("round_draws", 0)),
+                    )
                     continue
                 keyboard.release_all(require_foreground=args.foreground_only)
                 if current == 6:
@@ -502,7 +534,26 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     continue
                 if current == 2:
                     # Arcade loss/completion can return to the main menu. Start
-                    # another Easy run with Sakuya without dropping the bridge.
+                    # another run with Sakuya without dropping the bridge.
+                    requested_difficulty = (
+                        curriculum.choose()
+                        if args.difficulty == "curriculum"
+                        else args.difficulty
+                    )
+                    history.extend(
+                        configure_cpu_difficulty(
+                            reader, keyboard, requested_difficulty
+                        )
+                    )
+                    active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
+                    transitions.append(
+                        {
+                            "from": current,
+                            "to": current,
+                            "event": "difficulty-configured",
+                            "difficulty": active_difficulty,
+                        }
+                    )
                     history.extend(
                         enter_arcade_battle(
                             reader,
@@ -522,6 +573,9 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 "transitions": transitions,
                 "requested_seconds": args.battle_seconds,
                 "continuous": args.continuous,
+                "difficulty_mode": args.difficulty,
+                "active_difficulty": active_difficulty,
+                "curriculum": curriculum.status(),
             }
         print(
             json.dumps(
@@ -532,6 +586,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                         "scene_id": scene_id(reader),
                         "game_mode": game_mode(reader),
                         "requested_p1_character": args.p1_character,
+                        "difficulty": DIFFICULTIES[cpu_difficulty(reader)],
                     },
                     "fight": fight_result,
                 },
@@ -620,10 +675,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=fight)
 
-    p = sub.add_parser("auto-arcade", help="launch and enter an Easy Arcade battle")
+    p = sub.add_parser(
+        "auto-arcade",
+        help="launch and enter selectable/curriculum Arcade battles",
+    )
     p.add_argument("--launch", action="store_true")
     p.add_argument("--timeout", type=float, default=15.0)
     p.add_argument("--p1-character", choices=CHARACTERS, default="sakuya")
+    p.add_argument(
+        "--difficulty",
+        choices=(*DIFFICULTIES, "curriculum"),
+        default="curriculum",
+        help="fixed CPU difficulty or adaptive promotion/demotion (default)",
+    )
     duration = p.add_mutually_exclusive_group()
     duration.add_argument("--battle-seconds", type=float, default=0.0)
     duration.add_argument(

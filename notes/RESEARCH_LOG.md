@@ -79,9 +79,13 @@ projectiles, and punishes only observed recovery windows.
 
 ## 2026-08-05 — corrected Arcade route and live fighter roots
 
-- **Observed** main-menu index `1` calls `sub_43A560(1, 0)`: game mode `1`
-  (Arcade) with difficulty `0` (Easy). Practice index `5`/mode `8` is no
-  longer the autoplay route because it has no CPU policy.
+- **Corrected, observed in IDA** main-menu index `1` calls
+  `configure_game_mode_and_load_select(1, 0)`, but its second argument is
+  replay/input routing state (`0x006E62E4`), not CPU difficulty. CPU difficulty
+  is `get_game_config()+0x64` (`0x006E6B9C`) and is clamped to `0..3` by
+  `CMenuConfig_ctor`: Easy, Normal, Hard, Lunatic. The controller changes it
+  through Config row 0 and validates the native value after every input edge.
+  Practice index `5`/mode `8` remains excluded because it has no CPU policy.
 - **Observed** the character-select UI grid is not the internal character-ID
   order. Its first row is Reimu, Sakuya, Youmu, Marisa; therefore Sakuya is
   cursor slot `1`, a single Right edge from the default Reimu slot. Slot `2`
@@ -104,6 +108,9 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
 `create_arcade_battle_manager_and_renderer`, `CBattleManagerArcade_ctor`,
 `CBattleManagerBase_ctor`, `arcade_battle_update_state_machine`, and
 `resolve_fighter_body_collision`.
+
+Additional IDA names/comments: `get_game_config`, `g_game_config`,
+`CMenuConfig_ctor`, and the CPU-difficulty field comment at `0x006E6B9C`.
 
 ## 2026-08-05 — Sakuya move sources and hot policy boundary
 

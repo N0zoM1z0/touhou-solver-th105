@@ -22,6 +22,9 @@ ADDR_P1_INPUT = 0x006E6300
 ADDR_COMBINED_MENU_INPUT = 0x006E7520
 ADDR_GAME_MODE = 0x006E62EC
 ADDR_BATTLE_MANAGER = 0x006E6244
+# CGameConfig (get_game_config -> 0x006E6B38) stores CPU difficulty at +0x64.
+# The Config menu clamps it to 0..3 and persists changes through normal UI input.
+ADDR_CPU_DIFFICULTY = 0x006E6B9C
 
 # CBattleManagerBase owns the two live fighter pointers at +0x0C/+0x10.
 BATTLE_MANAGER_P1_OFFSET = 0x0C

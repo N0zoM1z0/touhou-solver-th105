@@ -198,6 +198,53 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         assert utility is not None
         self.assertGreater(utility, 0.0)
 
+    def test_skill_commit_allows_only_a_learned_recovery_window(self) -> None:
+        policy = SakuyaAdaptivePolicy()
+        me = SimpleNamespace(
+            action_id=0, x=100.0, y=0.0, velocity_x=0.0,
+        )
+        enemy = SimpleNamespace(
+            action_id=400, x=700.0, y=0.0, velocity_x=0.0,
+        )
+        observation = SimpleNamespace(
+            state=SimpleNamespace(p1=me, p2=enemy),
+            enemy_projectiles=(),
+        )
+        policy.last_assessment = SimpleNamespace(
+            phase="active", confidence=1.0, punish_window=30.0,
+        )
+        self.assertFalse(
+            policy._safe_to_commit_skill(
+                observation, "236B", 600.0, commitment=45, startup=10.0
+            )
+        )
+        policy.last_assessment = SimpleNamespace(
+            phase="recovery", confidence=0.9, punish_window=14.0,
+        )
+        self.assertTrue(
+            policy._safe_to_commit_skill(
+                observation, "236B", 600.0, commitment=45, startup=10.0
+            )
+        )
+
+    def test_skill_commit_rejects_recovery_shorter_than_startup(self) -> None:
+        policy = SakuyaAdaptivePolicy()
+        observation = SimpleNamespace(
+            state=SimpleNamespace(
+                p1=SimpleNamespace(action_id=0, x=100.0, y=0.0, velocity_x=0.0),
+                p2=SimpleNamespace(action_id=400, x=700.0, y=0.0, velocity_x=0.0),
+            ),
+            enemy_projectiles=(),
+        )
+        policy.last_assessment = SimpleNamespace(
+            phase="recovery", confidence=0.9, punish_window=8.0,
+        )
+        self.assertFalse(
+            policy._safe_to_commit_skill(
+                observation, "236B", 600.0, commitment=45, startup=10.0
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
