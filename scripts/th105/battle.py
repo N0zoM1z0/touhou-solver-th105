@@ -28,7 +28,7 @@ from .knowledge import (
 from .policy_api import PolicyObservation
 from .policy_loader import HotReloadPolicy
 from .telemetry import BoundedJsonlWriter
-from .human_learning import demonstrations_for
+from .human_learning import compile_human_file, compiled_demonstrations_for
 from .win32 import ProcessReader
 
 
@@ -432,14 +432,20 @@ def run_adaptive_fight(
         offense_model_for(knowledge_path, opponent_key)
         if knowledge_path is not None else {}
     )
-    prior_human_demonstrations = (
-        demonstrations_for(
-            telemetry_path.with_name("th105_human_demonstrations.json"),
+    prior_human_demonstrations: dict[str, object] = {}
+    if telemetry_path is not None:
+        human_source = telemetry_path.with_name("th105_human_demonstrations.json")
+        human_compiled = telemetry_path.with_name("th105_human_policy.json")
+        if human_source.is_file() and (
+            not human_compiled.is_file()
+            or human_compiled.stat().st_mtime_ns < human_source.stat().st_mtime_ns
+        ):
+            compile_human_file(human_source, human_compiled)
+        prior_human_demonstrations = compiled_demonstrations_for(
+            human_compiled,
             f"0x{state.p1.vtable:08X}",
             opponent_key,
         )
-        if telemetry_path is not None else {}
-    )
 
     telemetry = BoundedJsonlWriter(telemetry_path) if telemetry_path is not None else None
 
@@ -458,6 +464,7 @@ def run_adaptive_fight(
                 "last_damage_context": metrics.get("last_damage_context"),
                 "opponent_assessment": metrics.get("opponent_assessment"),
                 "projectile_envelopes": metrics.get("projectile_envelopes"),
+                "human_demonstrations": metrics.get("human_demonstrations"),
                 "performance": metrics.get("performance"),
             },
         }

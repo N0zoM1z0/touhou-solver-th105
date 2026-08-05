@@ -9,6 +9,7 @@ from collections import Counter, deque
 from ..battle import boxes_world_envelope, local_box_to_world
 from ..defense_learning import DefenseResponseModel
 from ..hazard import HazardEvaluator, HazardProjectile, MovementCandidate
+from ..human_learning import human_demonstration_utility as _human_demonstration_utility
 from ..motion import build_motion_frames
 from ..offense_learning import ActionOutcomeModel, combat_context
 from ..opponent_model import ActionAssessment, OpponentActionModel
@@ -262,6 +263,7 @@ class SakuyaAdaptivePolicy:
         self.offense_knowledge_seeded = False
         self.human_knowledge_seeded = False
         self.human_demonstrations: dict[str, object] = {}
+        self.last_human_demonstration: dict[str, object] = {}
         self.last_damage_frame = -10000
         self.last_damage_context: dict[str, object] = {}
         self.defense_motion_issued = False
@@ -387,51 +389,66 @@ class SakuyaAdaptivePolicy:
             enemy_x=enemy.x,
             phase="reaction",
         )
-        chains = self.human_demonstrations.get("chains", {})
-        if not isinstance(chains, dict):
-            return None
         viable: list[tuple[float, str, str, int]] = []
         spirit = int(getattr(me, "spirit", 1000))
         prefix = context.rsplit(":", 1)[0]
-        for source_context, context_penalty in (
-            (context, 0.0),
-            (f"{prefix}:neutral", 100.0),
-        ):
-            row = chains.get(source_context, {})
-            if not isinstance(row, dict):
-                continue
-            for signature, raw in row.items():
-                if not isinstance(raw, dict):
+        context_options = ((context, 0.0), (f"{prefix}:neutral", 100.0))
+        compiled_contexts = self.human_demonstrations.get("contexts", {})
+        if isinstance(compiled_contexts, dict):
+            for source_context, context_penalty in context_options:
+                candidates = compiled_contexts.get(source_context, ())
+                if not isinstance(candidates, list):
                     continue
-                trials = max(1, int(raw.get("trials", 0)))
-                connections = int(raw.get("connections", 0))
-                if connections <= 0:
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        continue
+                    average_spirit = float(candidate.get("average_spirit", 0.0))
+                    if average_spirit > max(0, spirit - 200):
+                        continue
+                    score = float(candidate.get("score", 0.0)) - context_penalty
+                    if score <= 0.0:
+                        continue
+                    viable.append(
+                        (
+                            score,
+                            str(candidate.get("signature", "")),
+                            str(candidate.get("pattern", "")),
+                            int(candidate.get("connections", 0)),
+                        )
+                    )
+        else:
+            # Compatibility for a controller started before the offline human
+            # compiler existed. Fresh encounters receive only compiled rows.
+            chains = self.human_demonstrations.get("chains", {})
+            if not isinstance(chains, dict):
+                return None
+            for source_context, context_penalty in context_options:
+                row = chains.get(source_context, {})
+                if not isinstance(row, dict):
                     continue
-                average_damage = float(raw.get("total_damage", 0)) / trials
-                average_self_damage = float(raw.get("total_self_damage", 0)) / trials
-                average_spirit = float(raw.get("total_spirit_cost", 0)) / trials
-                average_duration = float(raw.get("total_duration", 0)) / trials
-                if average_spirit > max(0, spirit - 200):
-                    continue
-                patterns = raw.get("input_patterns", {})
-                if not isinstance(patterns, dict) or not patterns:
-                    continue
-                pattern, support = max(
-                    ((str(value), int(count)) for value, count in patterns.items()),
-                    key=lambda item: item[1],
-                )
-                score = (
-                    average_damage
-                    - 1.5 * average_self_damage
-                    - 0.2 * average_spirit
-                    - 1.5 * average_duration
-                    + min(5, support) * 40.0
-                    - context_penalty
-                )
-                viable.append((score, str(signature), pattern, connections))
+                for signature, raw in row.items():
+                    if not isinstance(raw, dict):
+                        continue
+                    connections = int(raw.get("connections", 0))
+                    patterns = raw.get("input_patterns", {})
+                    if not isinstance(patterns, dict) or not patterns:
+                        continue
+                    pattern, support = max(
+                        ((str(value), int(count)) for value, count in patterns.items()),
+                        key=lambda item: item[1],
+                    )
+                    score = _human_demonstration_utility(
+                        raw,
+                        spirit=spirit,
+                        support=support,
+                        context_penalty=context_penalty,
+                    )
+                    if score is None:
+                        continue
+                    viable.append((score, str(signature), pattern, connections))
         if not viable:
             return None
-        _score, signature, pattern, _connections = max(viable)
+        score, signature, pattern, connections = max(viable)
         frames = _demonstration_frames(pattern, toward)
         if not frames:
             return None
@@ -450,6 +467,14 @@ class SakuyaAdaptivePolicy:
         self.combo_confirm_deadline = observation.frame + min(24, len(frames))
         self.attack_cooldown = min(120, len(frames) + 24)
         self.counts[f"human_demo_attempts:{signature}"] += 1
+        self.last_human_demonstration = {
+            "frame": observation.frame,
+            "context": context,
+            "signature": signature,
+            "score": score,
+            "connections": connections,
+            "queued_frames": len(frames),
+        }
         return self.queue.popleft(), f"human-punish:{signature}"
 
     def _safe_to_commit_skill(
@@ -1191,6 +1216,9 @@ class SakuyaAdaptivePolicy:
         return self._decision(keys, intent)
 
     def metrics(self) -> dict[str, object]:
+        human_contexts = self.human_demonstrations.get("contexts", {})
+        if not isinstance(human_contexts, dict):
+            human_contexts = {}
         return {
             "counts": dict(self.counts),
             "own_action_frames": {str(k): v for k, v in self.actions.most_common()},
@@ -1207,6 +1235,20 @@ class SakuyaAdaptivePolicy:
             "defense_response_state": self.defense_responses.export_state(),
             "offense_outcomes": self.offense_outcomes.metrics(),
             "offense_outcome_state": self.offense_outcomes.export_state(),
+            "human_demonstrations": {
+                "contexts": len(human_contexts),
+                "candidates": sum(
+                    len(candidates)
+                    for candidates in human_contexts.values()
+                    if isinstance(candidates, list)
+                ),
+                "attempts": sum(
+                    count
+                    for name, count in self.counts.items()
+                    if name.startswith("human_demo_attempts:")
+                ),
+                "last_selected": self.last_human_demonstration or None,
+            },
             "opponent_assessment": {
                 "action": self.last_assessment.action_id,
                 "elapsed": self.last_assessment.elapsed,

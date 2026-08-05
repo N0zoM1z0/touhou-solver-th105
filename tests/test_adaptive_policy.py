@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from th105.policies.adaptive import (
     _demonstration_frames,
     _hazard_projectiles,
+    _human_demonstration_utility,
     _native_guard_response,
 )
 
@@ -57,6 +58,37 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
     def test_human_pattern_rejects_unbounded_or_unknown_input(self) -> None:
         self.assertEqual(_demonstration_frames("toward+q@2", "right"), [])
         self.assertEqual(_demonstration_frames("z@181", "right"), [])
+
+    def test_losing_human_trade_is_not_a_replay_candidate(self) -> None:
+        losing = {
+            "trials": 1,
+            "connections": 1,
+            "total_damage": 480,
+            "total_self_damage": 1125,
+            "total_spirit_cost": 588,
+            "total_duration": 70,
+        }
+        self.assertIsNone(
+            _human_demonstration_utility(
+                losing, spirit=1000, support=1, context_penalty=0.0
+            )
+        )
+
+    def test_safe_human_hit_has_positive_prior_utility(self) -> None:
+        safe = {
+            "trials": 1,
+            "connections": 1,
+            "total_damage": 690,
+            "total_self_damage": 0,
+            "total_spirit_cost": 200,
+            "total_duration": 52,
+        }
+        utility = _human_demonstration_utility(
+            safe, spirit=1000, support=1, context_penalty=0.0
+        )
+        self.assertIsNotNone(utility)
+        assert utility is not None
+        self.assertGreater(utility, 0.0)
 
 
 if __name__ == "__main__":

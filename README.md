@@ -94,8 +94,11 @@ the game. It stores bounded sufficient statistics plus facing-normalized,
 run-length-encoded input patterns in
 `runtime/th105_human_demonstrations.json`. The autoplay policy loads successful
 matchup/context chains as priors for confirmed punish windows, then continues
-scoring their real autoplay outcomes. Failed or unsafe demonstrations are not
-blindly preferred.
+scoring their real autoplay outcomes. `scripts/train_th105_models.py` compiles
+the aggregate into `runtime/th105_human_policy.json`: each context keeps at most
+eight ranked candidates, reserves 200 spirit, and rejects low-connect or
+high-self-damage trades before the online loop sees them. Failed or unsafe
+demonstrations are not blindly preferred.
 
 Useful Windows diagnostics:
 

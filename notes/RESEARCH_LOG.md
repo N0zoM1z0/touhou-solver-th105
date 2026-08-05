@@ -188,3 +188,17 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   the ordinary hit-confirm abort, threat cancellation, and online outcome
   learner. A merely inferred recovery window still permits only one close-A
   probe, not a full demonstrated or built-in combo.
+- **Observed (first physical Sakuya session)** 465 seconds of read-only play
+  covered three opponent vtables, 329 action trials, 180 offensive-chain trials,
+  and 94 distinct action transitions. Only aggregates and bounded normalized
+  input patterns were retained; no raw frame stream entered the training data.
+- **Implemented** the offline human compiler ranks chains by connected damage,
+  self-damage, spirit cost, duration, and repeated-pattern support. It rejects
+  connection rates below 50%, spends that violate the 200-spirit reserve, and
+  trades whose average self-damage exceeds both 100 and 35% of dealt damage.
+  The resulting read-mostly artifact had 47 candidates across 33 contexts, with
+  no more than eight candidates considered by an online decision.
+- **Implemented** compact live policy metrics report loaded human context and
+  candidate counts, total replay attempts, and the last selected signature.
+  This makes demonstrated-policy use auditable without retaining raw combat
+  frames.

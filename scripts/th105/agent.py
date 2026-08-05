@@ -18,7 +18,7 @@ from .constants import (
 from .input import KEYS, VIRTUAL_KEYS, Keyboard
 from .injected_input import InjectedInputBridge, InjectedKeyboard
 from .injected_input import HOOK_ADDRESS, HOOK_ORIGINAL
-from .human_learning import HumanDemonstrationRecorder
+from .human_learning import HumanDemonstrationRecorder, compile_human_file
 from .combo import parse_combo, play_combo
 from .battle import (
     battle_state_json,
@@ -266,6 +266,10 @@ def learn_human(args: argparse.Namespace) -> int:
         if in_battle:
             recorder.end_encounter(frame, last_state)
         recorder.flush()
+        compile_human_file(
+            args.output_path,
+            args.output_path.with_name("th105_human_policy.json"),
+        )
         reader.close()
     print(
         json.dumps(

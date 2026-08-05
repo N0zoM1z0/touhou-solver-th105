@@ -9,7 +9,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.human_learning import HumanDemonstrationRecorder
+from th105.human_learning import (
+    HumanDemonstrationRecorder,
+    compile_human_demonstrations,
+)
 
 
 def state(
@@ -73,6 +76,14 @@ class HumanDemonstrationTests(unittest.TestCase):
             chain = matchup["chains"]["close:ground:field:reaction"]
             self.assertEqual(chain["300:0>301:0"]["total_damage"], 300)
             self.assertNotIn("frames", data)
+
+            compiled = compile_human_demonstrations(data)
+            candidates = compiled["matchups"]["0x00000AAA|0x00000BBB"][
+                "contexts"
+            ]["close:ground:field:reaction"]
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(candidates[0]["signature"], "300:0>301:0")
+            self.assertGreater(candidates[0]["score"], 0.0)
 
 
 if __name__ == "__main__":

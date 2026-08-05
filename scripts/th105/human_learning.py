@@ -16,6 +16,143 @@ if TYPE_CHECKING:
     from .battle import BattleState
 
 
+def human_demonstration_utility(
+    raw: dict[str, object],
+    *,
+    spirit: int,
+    support: int,
+    context_penalty: float = 0.0,
+) -> float | None:
+    """Return safe empirical utility, or None for an unusable demonstration."""
+    trials = max(1, int(raw.get("trials", 0)))
+    connections = int(raw.get("connections", 0))
+    if connections <= 0 or connections / trials < 0.5:
+        return None
+    average_damage = float(raw.get("total_damage", 0)) / trials
+    average_self_damage = float(raw.get("total_self_damage", 0)) / trials
+    average_spirit = float(raw.get("total_spirit_cost", 0)) / trials
+    average_duration = float(raw.get("total_duration", 0)) / trials
+    if average_spirit > max(0, spirit - 200):
+        return None
+    if average_self_damage > max(100.0, average_damage * 0.35):
+        return None
+    score = (
+        average_damage
+        - 1.5 * average_self_damage
+        - 0.2 * average_spirit
+        - 1.5 * average_duration
+        + min(5, support) * 40.0
+        - context_penalty
+    )
+    return score if score > 0.0 else None
+
+
+def compile_human_demonstrations(
+    data: dict[str, object],
+    *,
+    assumed_spirit: int = 1000,
+    max_candidates_per_context: int = 8,
+) -> dict[str, object]:
+    """Compile bounded raw aggregates into ranked online candidate lists."""
+    output: dict[str, object] = {
+        "version": 1,
+        "generated_at": time.time(),
+        "matchups": {},
+    }
+    matchups = data.get("matchups", {})
+    if not isinstance(matchups, dict):
+        return output
+    compiled_matchups = output["matchups"]
+    assert isinstance(compiled_matchups, dict)
+    for matchup_key, raw_matchup in matchups.items():
+        if not isinstance(raw_matchup, dict):
+            continue
+        contexts: dict[str, object] = {}
+        raw_contexts = raw_matchup.get("chains", {})
+        if isinstance(raw_contexts, dict):
+            for context, raw_row in raw_contexts.items():
+                if not isinstance(raw_row, dict):
+                    continue
+                candidates: list[dict[str, object]] = []
+                for signature, raw in raw_row.items():
+                    if signature == "__other__" or not isinstance(raw, dict):
+                        continue
+                    patterns = raw.get("input_patterns", {})
+                    if not isinstance(patterns, dict) or not patterns:
+                        continue
+                    pattern, support = max(
+                        ((str(value), int(count)) for value, count in patterns.items()),
+                        key=lambda item: item[1],
+                    )
+                    score = human_demonstration_utility(
+                        raw,
+                        spirit=assumed_spirit,
+                        support=support,
+                    )
+                    if score is None:
+                        continue
+                    trials = max(1, int(raw.get("trials", 0)))
+                    candidates.append(
+                        {
+                            "signature": str(signature),
+                            "pattern": pattern,
+                            "score": score,
+                            "trials": trials,
+                            "connections": int(raw.get("connections", 0)),
+                            "average_damage": float(raw.get("total_damage", 0)) / trials,
+                            "average_self_damage": (
+                                float(raw.get("total_self_damage", 0)) / trials
+                            ),
+                            "average_spirit": (
+                                float(raw.get("total_spirit_cost", 0)) / trials
+                            ),
+                            "support": support,
+                        }
+                    )
+                if candidates:
+                    contexts[str(context)] = sorted(
+                        candidates,
+                        key=lambda item: (
+                            float(item["score"]),
+                            int(item["support"]),
+                            str(item["signature"]),
+                        ),
+                        reverse=True,
+                    )[:max_candidates_per_context]
+        if contexts:
+            compiled_matchups[str(matchup_key)] = {
+                "p1_vtable": raw_matchup.get("p1_vtable"),
+                "p2_vtable": raw_matchup.get("p2_vtable"),
+                "contexts": contexts,
+            }
+    return output
+
+
+def compile_human_file(source: Path, destination: Path) -> dict[str, object]:
+    data = json.loads(source.read_text(encoding="utf-8"))
+    compiled = compile_human_demonstrations(data)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(compiled, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temporary.replace(destination)
+    return compiled
+
+
+def compiled_demonstrations_for(
+    path: Path, p1_vtable: str, p2_vtable: str
+) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("version") != 1 or not isinstance(data.get("matchups"), dict):
+        return {}
+    row = data["matchups"].get(f"{p1_vtable}|{p2_vtable}", {})
+    return row if isinstance(row, dict) else {}
+
+
 def demonstrations_for(
     path: Path, p1_vtable: str, p2_vtable: str
 ) -> dict[str, object]:
