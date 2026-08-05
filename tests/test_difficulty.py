@@ -6,10 +6,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.difficulty import DifficultyCurriculum
+from th105.difficulty import DifficultyCurriculum, next_cyclic_difficulty
 
 
 class DifficultyCurriculumTests(unittest.TestCase):
+    def test_cycle_advances_and_wraps(self) -> None:
+        self.assertEqual(next_cyclic_difficulty(2), "lunatic")
+        self.assertEqual(next_cyclic_difficulty(3), "easy")
+
+    def test_cycle_rejects_invalid_level(self) -> None:
+        with self.assertRaises(ValueError):
+            next_cyclic_difficulty(4)
+
     def test_promotes_one_level_after_sustained_wins(self) -> None:
         curriculum = DifficultyCurriculum(0)
         curriculum.record(wins=4, losses=2)

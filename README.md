@@ -83,7 +83,9 @@ The launcher is equivalent to
 `auto-arcade --launch --p1-character sakuya --battle-seconds 300`. The default
 `--difficulty curriculum` promotes one level after sustained wins and demotes
 one level after sustained losses; pass `--difficulty easy`, `normal`, `hard`, or
-`lunatic` for a fixed campaign. The injected
+`lunatic` for a fixed campaign, or `--difficulty cycle` to rotate
+Easy→Normal→Hard→Lunatic after complete Arcade campaigns. Learned observations
+are stored under separate opponent-and-difficulty keys. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Pass `--foreground-only` to restore
 strict foreground ownership. Round-end and Arcade dialogue screens receive

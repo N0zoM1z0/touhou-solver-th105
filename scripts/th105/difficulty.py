@@ -8,6 +8,13 @@ from dataclasses import dataclass, field
 from .menu import DIFFICULTIES
 
 
+def next_cyclic_difficulty(level: int) -> str:
+    """Return the next fixed campaign level, wrapping Lunatic to Easy."""
+    if not 0 <= level < len(DIFFICULTIES):
+        raise ValueError(f"invalid current difficulty level {level}")
+    return DIFFICULTIES[(level + 1) % len(DIFFICULTIES)]
+
+
 @dataclass
 class DifficultyCurriculum:
     """Promote/demote one step from a bounded window of native round results."""

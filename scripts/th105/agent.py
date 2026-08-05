@@ -27,7 +27,7 @@ from .controller_lock import (
     ControllerLock,
     default_controller_lock_path,
 )
-from .difficulty import DifficultyCurriculum
+from .difficulty import DifficultyCurriculum, next_cyclic_difficulty
 from .battle import (
     TerminalRoundTracker,
     battle_state_json,
@@ -441,6 +441,14 @@ def auto_arcade(args: argparse.Namespace) -> int:
         curriculum = DifficultyCurriculum(cpu_difficulty(reader))
         terminal_tracker = TerminalRoundTracker()
         active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
+
+        def choose_campaign_difficulty() -> str:
+            if args.difficulty == "curriculum":
+                return curriculum.choose()
+            if args.difficulty == "cycle":
+                return next_cyclic_difficulty(cpu_difficulty(reader))
+            return args.difficulty
+
         if scene_id(reader) == 5 and game_mode(reader) == 1:
             history = [
                 {
@@ -451,11 +459,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
             ]
         else:
             history = reach_main_menu(reader, keyboard, timeout=args.timeout)
-            requested_difficulty = (
-                curriculum.choose()
-                if args.difficulty == "curriculum"
-                else args.difficulty
-            )
+            requested_difficulty = choose_campaign_difficulty()
             history.extend(
                 configure_cpu_difficulty(reader, keyboard, requested_difficulty)
             )
@@ -552,11 +556,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 if current == 2:
                     # Arcade loss/completion can return to the main menu. Start
                     # another run with Sakuya without dropping the bridge.
-                    requested_difficulty = (
-                        curriculum.choose()
-                        if args.difficulty == "curriculum"
-                        else args.difficulty
-                    )
+                    requested_difficulty = choose_campaign_difficulty()
                     history.extend(
                         configure_cpu_difficulty(
                             reader, keyboard, requested_difficulty
@@ -702,9 +702,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--p1-character", choices=CHARACTERS, default="sakuya")
     p.add_argument(
         "--difficulty",
-        choices=(*DIFFICULTIES, "curriculum"),
+        choices=(*DIFFICULTIES, "curriculum", "cycle"),
         default="curriculum",
-        help="fixed CPU difficulty or adaptive promotion/demotion (default)",
+        help=(
+            "fixed CPU difficulty, adaptive curriculum (default), or one-level "
+            "rotation after each Arcade campaign"
+        ),
     )
     duration = p.add_mutually_exclusive_group()
     duration.add_argument("--battle-seconds", type=float, default=0.0)
