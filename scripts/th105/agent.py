@@ -553,9 +553,24 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     # fresh fighter pointers, so wait and reacquire in scene 5.
                     time.sleep(0.05)
                     continue
+                if current == 3 and args.difficulty in {"curriculum", "cycle"}:
+                    # A completed Arcade match returns to character select, not
+                    # directly to the main menu. Confirming here caused an
+                    # infinite same-difficulty rematch, so dynamic schedulers
+                    # deliberately back out before configuring the next run.
+                    before = current
+                    keyboard.tap("x", hold_ms=60, gap_ms=500)
+                    transitions.append(
+                        {
+                            "from": before,
+                            "to": scene_id(reader),
+                            "event": "difficulty-return-main-menu",
+                        }
+                    )
+                    continue
                 if current == 2:
-                    # Arcade loss/completion can return to the main menu. Start
-                    # another run with Sakuya without dropping the bridge.
+                    # Start another run with Sakuya after selecting the next
+                    # fixed, adaptive, or cyclic difficulty.
                     requested_difficulty = choose_campaign_difficulty()
                     history.extend(
                         configure_cpu_difficulty(
