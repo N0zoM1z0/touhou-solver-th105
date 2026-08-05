@@ -112,6 +112,34 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
 Additional IDA names/comments: `get_game_config`, `g_game_config`,
 `CMenuConfig_ctor`, and the CPU-difficulty field comment at `0x006E6B9C`.
 
+## 2026-08-06 — terminal integrity and transient projectile snapshots
+
+- **Observed and corrected** a scene-5 projectile-list race could end the inner
+  policy loop while a dead-fighter result screen was still visible. The rebuilt
+  loop reported the same terminal state again, so Hard/Aya telemetry proved two
+  real losses while the compact round summary contained four. A shared terminal
+  tracker now requires a live `both HP > 0` observation before arming exactly
+  one terminal result. Cold attachment to a dead screen is deliberately ignored.
+- **Physical validation** on Hard/Remilia produced terminal sequences `1` and
+  `2`; telemetry, the encounter summary, and the durable model all recorded
+  exactly two losses. The previously polluted Hard/Aya round counter was
+  reconciled from four to its two telemetry-proven losses without changing
+  action, geometry, defense, projectile, or cancel evidence.
+- **Observed and corrected** the intrusive projectile object list can mutate
+  between its begin/end reads. A single mismatch formerly discarded the whole
+  hot policy instance and its active outcome episode. The loop now reuses at
+  most two copied snapshots, then temporarily supplies an empty set, and only
+  rebuilds after 60 consecutive unavailable frames.
+- **Physical validation** the same Remilia encounter ran continuously for
+  18,568 policy frames across 31 list races (maximum consecutive race: four),
+  then exited normally through the scene transition. No policy restart or
+  reload failure occurred.
+- Added a lightweight descriptive evaluator for per-opponent/difficulty
+  coverage, offense/defense rates, tail damage, and confidence intervals.
+  These proxy metrics are diagnostic only; complete-round physical A/B remains
+  authoritative except for hard compatibility, safety, crash, and latency
+  failures. Future GPU replay/artifact details are in `OFFLINE_TRAINING.md`.
+
 ## 2026-08-05 — Sakuya move sources and hot policy boundary
 
 - **Observed (binary/runtime)** Sakuya's character dispatcher at `0x004DEF70`

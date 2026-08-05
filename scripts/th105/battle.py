@@ -108,6 +108,32 @@ class BattleState:
     p2: FighterState
 
 
+@dataclass
+class TerminalRoundTracker:
+    """Deduplicate native round results across rebuilt battle loops.
+
+    Projectile/object lists can be transiently invalid while scene 5 remains
+    active. The outer controller then starts a fresh ``run_adaptive_fight``;
+    this shared tracker only rearms after observing both fighters alive.
+    """
+
+    armed: bool = False
+    observed_live_round: bool = False
+    sequence: int = 0
+
+    def observe(self, *, me_hp: int, enemy_hp: int) -> int | None:
+        if me_hp > 0 and enemy_hp > 0:
+            self.armed = True
+            self.observed_live_round = True
+            return None
+        if self.armed and self.observed_live_round and (me_hp <= 0 or enemy_hp <= 0):
+            self.armed = False
+            self.observed_live_round = False
+            self.sequence += 1
+            return self.sequence
+        return None
+
+
 @dataclass(frozen=True)
 class ProjectileState:
     pointer: int
@@ -395,11 +421,13 @@ def run_adaptive_fight(
     policy_path: Path | None = None,
     telemetry_path: Path | None = None,
     difficulty: str = "unknown",
+    terminal_tracker: TerminalRoundTracker | None = None,
 ) -> dict[str, int | float | str | object]:
     """Sense/actuate shell around a fail-safe hot-reloadable combat policy."""
     if seconds <= 0 or frame_hz <= 0:
         raise ValueError("battle duration and frame rate must be positive")
     state = read_battle_state(reader)
+    terminal_tracker = terminal_tracker or TerminalRoundTracker()
     initial = battle_state_json(state)
     deadline = time.perf_counter() + seconds
     period = 1.0 / frame_hz
@@ -407,6 +435,8 @@ def run_adaptive_fight(
     frames = guard_frames = projectile_guard_frames = decision_frames = 0
     round_end_frames = 0
     round_wins = round_losses = round_draws = 0
+    projectile_read_failures = consecutive_projectile_read_failures = 0
+    max_consecutive_projectile_read_failures = 0
     terminal_reported = False
     last_enemy_projectiles: tuple[ProjectileState, ...] = ()
     last_own_projectiles: tuple[ProjectileState, ...] = ()
@@ -579,23 +609,41 @@ def run_adaptive_fight(
                     else False if me.hp <= 0 < enemy.hp
                     else None
                 )
-                plugin.observe_terminal(
-                    {
-                        "frame": frames,
-                        "won": won,
-                        "me_hp": me.hp,
-                        "enemy_hp": enemy.hp,
-                        "max_me_hp": me.max_hp,
-                        "max_enemy_hp": enemy.max_hp,
-                        "spirit": me.spirit,
-                    }
+                terminal_sequence = terminal_tracker.observe(
+                    me_hp=me.hp, enemy_hp=enemy.hp
                 )
-                if won is True:
-                    round_wins += 1
-                elif won is False:
-                    round_losses += 1
-                else:
-                    round_draws += 1
+                if terminal_sequence is not None:
+                    plugin.observe_terminal(
+                        {
+                            "frame": frames,
+                            "won": won,
+                            "me_hp": me.hp,
+                            "enemy_hp": enemy.hp,
+                            "max_me_hp": me.max_hp,
+                            "max_enemy_hp": enemy.max_hp,
+                            "spirit": me.spirit,
+                        }
+                    )
+                    if won is True:
+                        round_wins += 1
+                    elif won is False:
+                        round_losses += 1
+                    else:
+                        round_draws += 1
+                    emit(
+                        "round-terminal",
+                        {
+                            "terminal_sequence": terminal_sequence,
+                            "manager": f"0x{state.manager:08X}",
+                            "opponent": opponent_key,
+                            "difficulty": difficulty,
+                            "won": won,
+                            "me_hp": me.hp,
+                            "enemy_hp": enemy.hp,
+                            "max_me_hp": me.max_hp,
+                            "max_enemy_hp": enemy.max_hp,
+                        },
+                    )
                 terminal_reported = True
             # Z rising edges advance round-result text and post-fight dialogue.
             # Keep them sparse so one edge cannot leak through several screens.
@@ -607,14 +655,37 @@ def run_adaptive_fight(
             nearest_enemy_projectile = None
             round_end_frames += 1
         else:
+            terminal_tracker.observe(me_hp=me.hp, enemy_hp=enemy.hp)
             round_end_frames = 0
             terminal_reported = False
             try:
-                last_enemy_projectiles = read_active_projectiles(reader, enemy, me)
-                last_own_projectiles = read_active_projectiles(reader, me, enemy)
-            except (OSError, RuntimeError):
-                reason = "projectile-state-transition"
-                break
+                enemy_projectiles = read_active_projectiles(reader, enemy, me)
+                own_projectiles = read_active_projectiles(reader, me, enemy)
+                last_enemy_projectiles = enemy_projectiles
+                last_own_projectiles = own_projectiles
+                consecutive_projectile_read_failures = 0
+            except (OSError, RuntimeError) as exc:
+                # The intrusive list can mutate between its begin/end reads as
+                # projectiles spawn or expire. Fighter state remains valid, and
+                # ProjectileState contains copied values, so reuse at most two
+                # snapshots instead of destroying the policy's active episode.
+                projectile_read_failures += 1
+                consecutive_projectile_read_failures += 1
+                max_consecutive_projectile_read_failures = max(
+                    max_consecutive_projectile_read_failures,
+                    consecutive_projectile_read_failures,
+                )
+                if consecutive_projectile_read_failures > 2:
+                    last_enemy_projectiles = ()
+                    last_own_projectiles = ()
+                if consecutive_projectile_read_failures == 1:
+                    emit(
+                        "projectile-read-race",
+                        {"frame": frames, "error": str(exc)[:160]},
+                    )
+                if consecutive_projectile_read_failures >= 60:
+                    reason = "projectile-state-unavailable"
+                    break
             nearest_enemy_projectile = None
             for projectile in last_enemy_projectiles:
                 distance_to_projectile = math.hypot(
@@ -713,6 +784,10 @@ def run_adaptive_fight(
         "round_wins": round_wins,
         "round_losses": round_losses,
         "round_draws": round_draws,
+        "projectile_read_failures": projectile_read_failures,
+        "max_consecutive_projectile_read_failures": (
+            max_consecutive_projectile_read_failures
+        ),
         "difficulty": difficulty,
         "opponent": opponent_key,
         "seconds": seconds,

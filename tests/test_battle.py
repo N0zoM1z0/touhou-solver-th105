@@ -15,6 +15,7 @@ from th105.battle import (
     FRAME_DATA_ATTACK_FLAGS,
     FRAME_DATA_BOX_VECTOR_A,
     FRAME_DATA_BOX_VECTOR_B,
+    TerminalRoundTracker,
     boxes_world_envelope,
     local_box_to_world,
     read_frame_box_vector,
@@ -87,6 +88,19 @@ class BootstrapBattleTests(unittest.TestCase):
             boxes_world_envelope((box,), x=100.0, y=10.0, facing=1),
             (80.0, 30.0, 140.0, 190.0),
         )
+
+    def test_terminal_tracker_deduplicates_rebuilt_battle_loops(self) -> None:
+        tracker = TerminalRoundTracker()
+        self.assertIsNone(tracker.observe(me_hp=10000, enemy_hp=10000))
+        self.assertEqual(tracker.observe(me_hp=0, enemy_hp=7400), 1)
+        self.assertIsNone(tracker.observe(me_hp=0, enemy_hp=7400))
+        self.assertIsNone(tracker.observe(me_hp=0, enemy_hp=0))
+        self.assertIsNone(tracker.observe(me_hp=10000, enemy_hp=10000))
+        self.assertEqual(tracker.observe(me_hp=2100, enemy_hp=0), 2)
+
+    def test_terminal_tracker_ignores_cold_attach_to_dead_screen(self) -> None:
+        tracker = TerminalRoundTracker()
+        self.assertIsNone(tracker.observe(me_hp=0, enemy_hp=5000))
 
 
 if __name__ == "__main__":

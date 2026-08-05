@@ -123,7 +123,14 @@ Run the unit suite and optional between-encounter compiler with:
 ```bash
 python -m unittest discover -s tests -v
 python scripts/train_th105_models.py
+python scripts/evaluate_th105_learning.py
 ```
+
+The evaluator reports per-opponent/difficulty coverage, offense/defense rates,
+tail damage, and Wilson confidence intervals from durable evidence. It is a
+descriptive monitoring gate, not a substitute for complete-round A/B testing.
+The future GPU corpus, artifact, and promotion protocol is specified in
+[`notes/OFFLINE_TRAINING.md`](notes/OFFLINE_TRAINING.md).
 
 ### Learning from human Sakuya play
 

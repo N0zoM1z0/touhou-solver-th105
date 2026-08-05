@@ -22,6 +22,7 @@ from .human_learning import HumanDemonstrationRecorder, compile_human_file
 from .combo import parse_combo, play_combo
 from .difficulty import DifficultyCurriculum
 from .battle import (
+    TerminalRoundTracker,
     battle_state_json,
     inspect_frame_boxes,
     read_active_projectiles,
@@ -428,6 +429,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
         api.focus(pid, args.timeout)
         keyboard.release_all(require_foreground=True)
         curriculum = DifficultyCurriculum(cpu_difficulty(reader))
+        terminal_tracker = TerminalRoundTracker()
         active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
         if scene_id(reader) == 5 and game_mode(reader) == 1:
             history = [
@@ -490,6 +492,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 policy_path=args.policy_plugin,
                                 telemetry_path=args.telemetry_path,
                                 difficulty=active_difficulty,
+                                terminal_tracker=terminal_tracker,
                             )
                         else:
                             encounter = run_bootstrap_fight(

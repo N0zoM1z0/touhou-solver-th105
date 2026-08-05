@@ -28,6 +28,12 @@ new observation.
    rotated and must not be the only source for a learned fact.
 4. `runtime/th105_compiled_policy.json` and `runtime/th105_human_policy.json`
    are read-only caches. They can always be rebuilt from tiers 1 and 2.
+5. Future durable option-level replay uses event-aligned semi-Markov transition
+   shards. Each row keeps the quantized start state, legal action set, chosen
+   action and behavior probability, duration, raw outcome components, next
+   state, opponent/difficulty, and independent schema versions. The concrete
+   training/deployment contract is in
+   [`OFFLINE_TRAINING.md`](OFFLINE_TRAINING.md).
 
 Damage is normalized to basis points of the observed maximum (`10000 == 100%`)
 while legacy raw counters remain present. This permits cross-character and
@@ -50,9 +56,9 @@ cannot recover.
 
 ## Future offline training
 
-The compact corpus directly supports contextual bandits, Bayesian tables,
-decision trees, and reward reweighting. A future high-capacity trainer can join
-it with bounded diagnostic or option-level replay samples, train on another
-machine, then export a small lookup, tree, or ONNX policy. Online deployment
-must continue to enforce the native legality and hazard constraints independently
-of that model.
+The compact aggregates directly support contextual bandits, Bayesian tables,
+decision trees, and reward reweighting. High-capacity offline RL additionally
+needs option-level state/action/next-state transitions; aggregate means cannot
+reconstruct counterfactual temporal structure. A future trainer exports a
+versioned, calibrated lookup/tree/int8 ONNX scorer, while online deployment
+continues to enforce native legality and hazard constraints independently.
