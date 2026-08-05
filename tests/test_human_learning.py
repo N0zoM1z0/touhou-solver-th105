@@ -55,6 +55,54 @@ class HumanDemonstrationTests(unittest.TestCase):
             "z@3,x@3,neutral@2",
         )
         self.assertEqual(normalize_human_pattern("toward+q@2"), "")
+        self.assertEqual(
+            normalize_human_pattern("a+toward+x@40,a+toward+x@40"),
+            "a+toward+x@60,a+toward+x@20",
+        )
+
+    def test_compiler_keeps_directional_pattern_outcomes_separate(self) -> None:
+        row = {
+            "trials": 2,
+            "connections": 1,
+            "total_damage": 600,
+            "total_self_damage": 700,
+            "total_spirit_cost": 100,
+            "total_duration": 40,
+            "input_patterns": {
+                "a+toward+x@3": {
+                    "trials": 1,
+                    "connections": 1,
+                    "total_damage": 600,
+                    "total_self_damage": 0,
+                    "total_spirit_cost": 50,
+                    "total_duration": 20,
+                },
+                "a+back+x@3": {
+                    "trials": 1,
+                    "connections": 0,
+                    "total_damage": 0,
+                    "total_self_damage": 700,
+                    "total_spirit_cost": 50,
+                    "total_duration": 20,
+                },
+            },
+        }
+        data = {
+            "version": 1,
+            "matchups": {
+                "p1|p2": {
+                    "p1_vtable": "p1",
+                    "p2_vtable": "p2",
+                    "chains": {"close:ground:field:reaction": {"300:0": row}},
+                }
+            },
+        }
+        candidates = compile_human_demonstrations(data)["matchups"]["p1|p2"][
+            "contexts"
+        ]["close:ground:field:reaction"]
+        self.assertEqual([item["pattern"] for item in candidates], ["a+toward+x@3"])
+        self.assertEqual(candidates[0]["precise_trials"], 1)
+        self.assertEqual(len(candidates[0]["pattern_id"]), 10)
 
     def test_aggregates_actions_cancel_edge_and_chain_without_raw_frames(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

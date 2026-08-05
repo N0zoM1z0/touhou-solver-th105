@@ -98,7 +98,9 @@ scoring their real autoplay outcomes. `scripts/train_th105_models.py` compiles
 the aggregate into `runtime/th105_human_policy.json`: each context keeps at most
 eight ranked candidates, reserves 200 spirit, and rejects low-connect or
 high-self-damage trades before the online loop sees them. Failed or unsafe
-demonstrations are not blindly preferred.
+demonstrations are not blindly preferred. Exact facing-relative directional
+patterns are scored separately, so Sakuya's advancing `toward+A+Z/X/C` routes
+do not inherit outcomes from retreating or non-directional variants.
 
 Useful Windows diagnostics:
 

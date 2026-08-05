@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -46,7 +47,13 @@ def normalize_human_pattern(pattern: str) -> str:
             runs[-1] = (chord, runs[-1][1] + frames)
         else:
             runs.append((chord, frames))
-    return ",".join(f"{chord}@{frames}" for chord, frames in runs)
+    encoded: list[str] = []
+    for chord, frames in runs:
+        while frames > 60:
+            encoded.append(f"{chord}@60")
+            frames -= 60
+        encoded.append(f"{chord}@{frames}")
+    return ",".join(encoded)
 
 
 def human_demonstration_utility(
@@ -113,42 +120,85 @@ def compile_human_demonstrations(
                     patterns = raw.get("input_patterns", {})
                     if not isinstance(patterns, dict) or not patterns:
                         continue
-                    normalized_patterns: dict[str, int] = {}
+                    normalized_patterns: dict[str, dict[str, int]] = {}
                     for value, count in patterns.items():
                         normalized = normalize_human_pattern(str(value))
                         if normalized:
-                            normalized_patterns[normalized] = (
-                                normalized_patterns.get(normalized, 0) + int(count)
+                            aggregate = normalized_patterns.setdefault(
+                                normalized,
+                                {
+                                    "legacy_support": 0,
+                                    "trials": 0,
+                                    "connections": 0,
+                                    "total_damage": 0,
+                                    "total_self_damage": 0,
+                                    "total_spirit_cost": 0,
+                                    "total_duration": 0,
+                                },
                             )
+                            if isinstance(count, dict):
+                                aggregate["legacy_support"] += int(
+                                    count.get("legacy_support", 0)
+                                )
+                                for field in (
+                                    "trials",
+                                    "connections",
+                                    "total_damage",
+                                    "total_self_damage",
+                                    "total_spirit_cost",
+                                    "total_duration",
+                                ):
+                                    aggregate[field] += int(count.get(field, 0))
+                            else:
+                                aggregate["legacy_support"] += int(count)
                     if not normalized_patterns:
                         continue
-                    pattern, support = max(
-                        normalized_patterns.items(), key=lambda item: item[1]
-                    )
-                    score = human_demonstration_utility(
-                        raw,
-                        spirit=assumed_spirit,
-                        support=support,
-                    )
-                    if score is None:
-                        continue
-                    trials = max(1, int(raw.get("trials", 0)))
-                    candidates.append(
-                        {
-                            "signature": str(signature),
-                            "pattern": pattern,
-                            "score": score,
-                            "trials": trials,
-                            "connections": int(raw.get("connections", 0)),
-                            "average_damage": float(raw.get("total_damage", 0)) / trials,
-                            "average_self_damage": (
-                                float(raw.get("total_self_damage", 0)) / trials
+                    signature_candidates: list[dict[str, object]] = []
+                    for pattern, pattern_stats in normalized_patterns.items():
+                        precise_trials = int(pattern_stats["trials"])
+                        support = precise_trials + int(pattern_stats["legacy_support"])
+                        outcome = pattern_stats if precise_trials else raw
+                        score = human_demonstration_utility(
+                            outcome,
+                            spirit=assumed_spirit,
+                            support=support,
+                        )
+                        if score is None:
+                            continue
+                        trials = max(1, int(outcome.get("trials", 0)))
+                        signature_candidates.append(
+                            {
+                                "signature": str(signature),
+                                "pattern": pattern,
+                                "pattern_id": hashlib.sha256(
+                                    pattern.encode("utf-8")
+                                ).hexdigest()[:10],
+                                "score": score,
+                                "trials": trials,
+                                "precise_trials": precise_trials,
+                                "connections": int(outcome.get("connections", 0)),
+                                "average_damage": (
+                                    float(outcome.get("total_damage", 0)) / trials
+                                ),
+                                "average_self_damage": (
+                                    float(outcome.get("total_self_damage", 0)) / trials
+                                ),
+                                "average_spirit": (
+                                    float(outcome.get("total_spirit_cost", 0)) / trials
+                                ),
+                                "support": support,
+                            }
+                        )
+                    candidates.extend(
+                        sorted(
+                            signature_candidates,
+                            key=lambda item: (
+                                float(item["score"]),
+                                int(item["support"]),
+                                str(item["pattern_id"]),
                             ),
-                            "average_spirit": (
-                                float(raw.get("total_spirit_cost", 0)) / trials
-                            ),
-                            "support": support,
-                        }
+                            reverse=True,
+                        )[:3]
                     )
                 if candidates:
                     contexts[str(context)] = sorted(
@@ -354,7 +404,28 @@ class HumanDemonstrationRecorder:
             patterns = stats.setdefault("input_patterns", {})
             assert isinstance(patterns, dict)
             if input_pattern in patterns or len(patterns) < 32:
-                patterns[input_pattern] = int(patterns.get(input_pattern, 0)) + 1
+                pattern_stats = patterns.get(input_pattern)
+                if isinstance(pattern_stats, int):
+                    pattern_stats = {"legacy_support": pattern_stats}
+                elif not isinstance(pattern_stats, dict):
+                    pattern_stats = {}
+                pattern_stats["trials"] = int(pattern_stats.get("trials", 0)) + 1
+                pattern_stats["connections"] = int(
+                    pattern_stats.get("connections", 0)
+                ) + int(damage > 0)
+                pattern_stats["total_damage"] = int(
+                    pattern_stats.get("total_damage", 0)
+                ) + damage
+                pattern_stats["total_self_damage"] = int(
+                    pattern_stats.get("total_self_damage", 0)
+                ) + self_damage
+                pattern_stats["total_spirit_cost"] = int(
+                    pattern_stats.get("total_spirit_cost", 0)
+                ) + spirit_cost
+                pattern_stats["total_duration"] = int(
+                    pattern_stats.get("total_duration", 0)
+                ) + duration
+                patterns[input_pattern] = pattern_stats
 
     @staticmethod
     def _normalized_chord(keys: frozenset[str], facing: int) -> str:

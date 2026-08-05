@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import time
 from collections import Counter, deque
 
@@ -389,7 +390,7 @@ class SakuyaAdaptivePolicy:
             enemy_x=enemy.x,
             phase="reaction",
         )
-        viable: list[tuple[float, str, str, int]] = []
+        viable: list[tuple[float, str, str, str, int]] = []
         spirit = int(getattr(me, "spirit", 1000))
         prefix = context.rsplit(":", 1)[0]
         context_options = ((context, 0.0), (f"{prefix}:neutral", 100.0))
@@ -413,6 +414,7 @@ class SakuyaAdaptivePolicy:
                             score,
                             str(candidate.get("signature", "")),
                             str(candidate.get("pattern", "")),
+                            str(candidate.get("pattern_id", "legacy")),
                             int(candidate.get("connections", 0)),
                         )
                     )
@@ -434,7 +436,18 @@ class SakuyaAdaptivePolicy:
                     if not isinstance(patterns, dict) or not patterns:
                         continue
                     pattern, support = max(
-                        ((str(value), int(count)) for value, count in patterns.items()),
+                        (
+                            (
+                                str(value),
+                                (
+                                    int(count.get("legacy_support", 0))
+                                    + int(count.get("trials", 0))
+                                    if isinstance(count, dict)
+                                    else int(count)
+                                ),
+                            )
+                            for value, count in patterns.items()
+                        ),
                         key=lambda item: item[1],
                     )
                     score = _human_demonstration_utility(
@@ -445,14 +458,17 @@ class SakuyaAdaptivePolicy:
                     )
                     if score is None:
                         continue
-                    viable.append((score, str(signature), pattern, connections))
+                    pattern_id = hashlib.sha256(pattern.encode("utf-8")).hexdigest()[:10]
+                    viable.append(
+                        (score, str(signature), pattern, pattern_id, connections)
+                    )
         if not viable:
             return None
-        score, signature, pattern, connections = max(viable)
+        score, signature, pattern, pattern_id, connections = max(viable)
         frames = _demonstration_frames(pattern, toward)
         if not frames:
             return None
-        label = f"human:{signature}"
+        label = f"human:{signature}:{pattern_id}"
         self.queue.extend(frames)
         self.offense_outcomes.begin(
             label,
@@ -466,11 +482,12 @@ class SakuyaAdaptivePolicy:
         self.combo_target_hp = enemy.hp
         self.combo_confirm_deadline = observation.frame + min(24, len(frames))
         self.attack_cooldown = min(120, len(frames) + 24)
-        self.counts[f"human_demo_attempts:{signature}"] += 1
+        self.counts[f"human_demo_attempts:{signature}:{pattern_id}"] += 1
         self.last_human_demonstration = {
             "frame": observation.frame,
             "context": context,
             "signature": signature,
+            "pattern_id": pattern_id,
             "score": score,
             "connections": connections,
             "queued_frames": len(frames),

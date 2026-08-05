@@ -222,3 +222,11 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   `0x20` stride. This places the validated P2 cursor/selection mirrors at
   controller `+0x134/+0x138`, corresponding to P1 `+0x10C/+0x110`. Read-only
   access is implemented; navigation remains gated on a live game-mode-2 probe.
+- **Implemented** human pattern statistics now bind each exact normalized input
+  trace to its own trials, connections, damage, self-damage, spirit cost, and
+  duration. This separates Sakuya's facing-relative advancing attacks such as
+  `toward+A+X`, `toward+A+C`, and `toward+A+Z` from retreating variants even
+  when they resolve to the same action/sequence signature. Compiled candidates
+  carry a stable short pattern ID, and online outcome learning keeps variants
+  distinct. Legacy count-only patterns remain readable and are progressively
+  upgraded by later demonstrations.
