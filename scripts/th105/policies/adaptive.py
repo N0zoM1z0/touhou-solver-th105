@@ -222,6 +222,26 @@ def _demonstration_frames(pattern: str, toward: str) -> list[set[str]]:
     return frames
 
 
+def _pattern_has_advancing_attack(pattern: str) -> bool:
+    """Recognize a facing-relative approach followed by a nearby attack edge."""
+    toward_recent = 0
+    for raw_run in pattern.split(",")[:64]:
+        chord, separator, raw_count = raw_run.rpartition("@")
+        if not separator:
+            return False
+        try:
+            count = int(raw_count)
+        except ValueError:
+            return False
+        names = set() if chord == "neutral" else set(chord.split("+"))
+        if "toward" in names:
+            toward_recent = 6
+        if names & {"z", "x", "c"} and ("toward" in names or toward_recent > 0):
+            return True
+        toward_recent = max(0, toward_recent - count)
+    return False
+
+
 class SakuyaAdaptivePolicy:
     api_version = POLICY_API_VERSION
     name = "sakuya-adaptive-v1"
@@ -392,6 +412,7 @@ class SakuyaAdaptivePolicy:
         )
         viable: list[tuple[float, str, str, str, int]] = []
         spirit = int(getattr(me, "spirit", 1000))
+        distance = abs(enemy.x - me.x)
         prefix = context.rsplit(":", 1)[0]
         context_options = ((context, 0.0), (f"{prefix}:neutral", 100.0))
         compiled_contexts = self.human_demonstrations.get("contexts", {})
@@ -406,6 +427,9 @@ class SakuyaAdaptivePolicy:
                     average_spirit = float(candidate.get("average_spirit", 0.0))
                     if average_spirit > max(0, spirit - 200):
                         continue
+                    pattern = str(candidate.get("pattern", ""))
+                    if distance >= 80.0 and not _pattern_has_advancing_attack(pattern):
+                        continue
                     score = float(candidate.get("score", 0.0)) - context_penalty
                     if score <= 0.0:
                         continue
@@ -413,7 +437,7 @@ class SakuyaAdaptivePolicy:
                         (
                             score,
                             str(candidate.get("signature", "")),
-                            str(candidate.get("pattern", "")),
+                            pattern,
                             str(candidate.get("pattern_id", "legacy")),
                             int(candidate.get("connections", 0)),
                         )
@@ -457,6 +481,8 @@ class SakuyaAdaptivePolicy:
                         context_penalty=context_penalty,
                     )
                     if score is None:
+                        continue
+                    if distance >= 80.0 and not _pattern_has_advancing_attack(pattern):
                         continue
                     pattern_id = hashlib.sha256(pattern.encode("utf-8")).hexdigest()[:10]
                     viable.append(
@@ -1071,12 +1097,15 @@ class SakuyaAdaptivePolicy:
         elif self.queue:
             keys = self.queue.popleft()
             intent = "sequence"
-        elif confirmed_punish and distance < 150 and me.action_id < 50:
+        elif confirmed_punish and distance < 260 and me.action_id < 50:
             selected = self._start_human_demonstration(observation, toward)
-            if selected is None:
+            if selected is None and distance < 150:
                 selected = self._start_combo(observation, toward, punish=True)
             if selected is None:
-                keys, intent = {back}, "punish-unavailable"
+                keys, intent = ({toward}, "close-for-punish") if distance >= 80 else (
+                    {back},
+                    "punish-unavailable",
+                )
             else:
                 keys, intent = selected
         elif (

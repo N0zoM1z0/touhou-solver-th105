@@ -230,3 +230,9 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   carry a stable short pattern ID, and online outcome learning keeps variants
   distinct. Legacy count-only patterns remain readable and are progressively
   upgraded by later demonstrations.
+- **Implemented** confirmed-punish replay now considers human demonstrations out
+  to the full mid-range bucket (`<260`) only when the trace contains a
+  facing-relative advance followed within six frames by Z/X/C. Ordinary human
+  strings and built-in grounded combos retain their close-range gates. This
+  exposes Sakuya's advancing attacks without turning mid-range recovery guesses
+  into blind combo commitments.

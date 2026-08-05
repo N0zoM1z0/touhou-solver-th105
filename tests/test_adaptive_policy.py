@@ -11,6 +11,7 @@ from th105.policies.adaptive import (
     _demonstration_frames,
     _hazard_projectiles,
     _human_demonstration_utility,
+    _pattern_has_advancing_attack,
     _native_guard_response,
 )
 
@@ -58,6 +59,12 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
     def test_human_pattern_rejects_unbounded_or_unknown_input(self) -> None:
         self.assertEqual(_demonstration_frames("toward+q@2", "right"), [])
         self.assertEqual(_demonstration_frames("z@181", "right"), [])
+
+    def test_advancing_attack_accepts_chord_or_short_sequence(self) -> None:
+        self.assertTrue(_pattern_has_advancing_attack("a+toward+x@3"))
+        self.assertTrue(_pattern_has_advancing_attack("toward@3,up+z@2"))
+        self.assertFalse(_pattern_has_advancing_attack("back@3,x@2"))
+        self.assertFalse(_pattern_has_advancing_attack("toward@8,z@2"))
 
     def test_losing_human_trade_is_not_a_replay_candidate(self) -> None:
         losing = {
