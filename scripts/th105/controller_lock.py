@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import tempfile
 import time
 from pathlib import Path
 from typing import BinaryIO
@@ -12,6 +13,17 @@ from typing import BinaryIO
 
 class ControllerAlreadyRunning(RuntimeError):
     """Raised before a second input controller can touch the game."""
+
+
+def default_controller_lock_path() -> Path:
+    """Keep Windows locking on NTFS; msvcrt byte locks reject WSL UNC files."""
+    if os.name == "nt":
+        return Path(tempfile.gettempdir()) / "touhou-solver-th105" / "controller.lock"
+    return (
+        Path(__file__).resolve().parents[2]
+        / "runtime"
+        / "th105_controller.lock"
+    )
 
 
 class ControllerLock:
@@ -99,4 +111,3 @@ class ControllerLock:
 
     def __exit__(self, *_exc: object) -> None:
         self.release()
-

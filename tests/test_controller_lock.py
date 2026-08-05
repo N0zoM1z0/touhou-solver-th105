@@ -8,10 +8,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.controller_lock import ControllerAlreadyRunning, ControllerLock
+from th105.controller_lock import (
+    ControllerAlreadyRunning,
+    ControllerLock,
+    default_controller_lock_path,
+)
 
 
 class ControllerLockTests(unittest.TestCase):
+    def test_default_lock_path_is_absolute(self) -> None:
+        self.assertTrue(default_controller_lock_path().is_absolute())
+
     def test_rejects_a_second_controller_and_records_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "controller.lock"
