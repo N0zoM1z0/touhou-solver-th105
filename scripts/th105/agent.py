@@ -17,6 +17,8 @@ from .constants import (
 )
 from .input import KEYS, VIRTUAL_KEYS, Keyboard
 from .injected_input import InjectedInputBridge, InjectedKeyboard
+from .injected_input import HOOK_ADDRESS, HOOK_ORIGINAL
+from .human_learning import HumanDemonstrationRecorder
 from .combo import parse_combo, play_combo
 from .battle import (
     battle_state_json,
@@ -208,6 +210,75 @@ def trace_actions(args: argparse.Namespace) -> int:
     finally:
         reader.close()
     print(json.dumps({"identity": identity, "events": events}, ensure_ascii=False))
+    return 0
+
+
+def learn_human(args: argparse.Namespace) -> int:
+    """Observe a human-controlled session without focus or input mutation."""
+    api = Win32()
+    reader, identity = open_target(api, args.game_dir)
+    recorder = HumanDemonstrationRecorder(
+        args.output_path,
+        telemetry_path=args.telemetry_path,
+    )
+    frame = 0
+    last_state = None
+    in_battle = False
+    stop_reason = "duration"
+    deadline = time.perf_counter() + args.seconds
+    try:
+        hook = reader.read(HOOK_ADDRESS, len(HOOK_ORIGINAL))
+        if hook != HOOK_ORIGINAL:
+            raise RuntimeError(
+                "human learning is read-only; stop auto-arcade/input bridge first"
+            )
+        try:
+            while time.perf_counter() < deadline:
+                if scene_id(reader) != 5:
+                    if in_battle:
+                        recorder.end_encounter(frame, last_state)
+                        recorder.flush()
+                        in_battle = False
+                        last_state = None
+                    time.sleep(1.0 / args.frame_hz)
+                    continue
+                try:
+                    state = read_battle_state(reader)
+                except (OSError, RuntimeError):
+                    time.sleep(1.0 / args.frame_hz)
+                    continue
+                in_battle = True
+                input_keys = frozenset(
+                    name
+                    for name in ("up", "down", "left", "right", "z", "x", "c", "a")
+                    if reader.read(ADDR_RAW_KEYBOARD + KEYS[name].dik_code, 1)[0]
+                    & 0x80
+                )
+                recorder.observe(frame, state, input_keys=input_keys)
+                last_state = state
+                frame += 1
+                if frame % 600 == 0:
+                    recorder.flush()
+                time.sleep(1.0 / args.frame_hz)
+        except KeyboardInterrupt:
+            stop_reason = "interrupt"
+    finally:
+        if in_battle:
+            recorder.end_encounter(frame, last_state)
+        recorder.flush()
+        reader.close()
+    print(
+        json.dumps(
+            {
+                "identity": identity,
+                "mode": "read-only-human-demonstration",
+                "frames": frame,
+                "stop_reason": stop_reason,
+                "summary": recorder.summary(),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
@@ -482,6 +553,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--coarse", action="store_true", help="record action/HP/command changes only")
     p.set_defaults(func=trace_actions)
 
+    p = sub.add_parser(
+        "learn-human",
+        help="read-only aggregation of a human-controlled Sakuya session",
+    )
+    p.add_argument("--seconds", type=float, default=1800.0)
+    p.add_argument("--frame-hz", type=float, default=60.0)
+    p.add_argument(
+        "--output-path",
+        type=Path,
+        default=Path("runtime") / "th105_human_demonstrations.json",
+    )
+    p.add_argument(
+        "--telemetry-path",
+        type=Path,
+        default=Path("runtime") / "th105_human_demonstrations.jsonl",
+    )
+    p.set_defaults(func=learn_human)
+
     p = sub.add_parser("tap", help="send bounded foreground-owned key taps")
     p.add_argument("keys", nargs="+", choices=tuple(KEYS))
     p.add_argument("--hold-ms", type=int, default=65)
@@ -557,4 +646,6 @@ def main(argv: list[str] | None = None) -> int:
         args.policy_plugin = args.policy_plugin.resolve()
     if hasattr(args, "telemetry_path"):
         args.telemetry_path = args.telemetry_path.resolve()
+    if hasattr(args, "output_path"):
+        args.output_path = args.output_path.resolve()
     return int(args.func(args))

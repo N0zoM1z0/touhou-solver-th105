@@ -22,6 +22,7 @@ class PolicyObservation:
     prior_projectile_model: dict[str, object] = field(default_factory=dict)
     prior_defense_model: dict[str, object] = field(default_factory=dict)
     prior_offense_model: dict[str, object] = field(default_factory=dict)
+    prior_human_demonstrations: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

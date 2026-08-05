@@ -32,6 +32,22 @@ class OpponentActionModelTests(unittest.TestCase):
         self.assertEqual(assessment.phase, "spell-danger")
         self.assertEqual(assessment.punish_window, 0.0)
 
+    def test_native_attack_box_marks_active_without_sacrificing_hp(self) -> None:
+        model = OpponentActionModel()
+        model.observe(0, enemy_action=0, me_hp=10000, projectile_count=0)
+        model.observe(10, enemy_action=408, me_hp=10000, projectile_count=0)
+        active = model.observe(
+            15,
+            enemy_action=408,
+            me_hp=10000,
+            projectile_count=0,
+            active_hitbox=True,
+        )
+        self.assertEqual(active.phase, "active")
+        profile = model.profiles[408]
+        self.assertEqual(profile.first_active_box_frame, 5.0)
+        self.assertEqual(profile.last_active_box_frame, 5.0)
+
     def test_hit_reaction_is_exposed_without_offensive_episode(self) -> None:
         model = OpponentActionModel()
         assessment = model.observe(

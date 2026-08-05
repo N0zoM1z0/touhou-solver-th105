@@ -54,6 +54,7 @@ def compile_knowledge(data: dict[str, object]) -> dict[str, object]:
                     for name, sample_name in (
                         ("first_impact", "impact_samples"),
                         ("first_projectile", "projectile_samples"),
+                        ("first_active_box", "active_box_observations"),
                     )
                     if int(profile.get(sample_name, 0)) > 0
                 ]

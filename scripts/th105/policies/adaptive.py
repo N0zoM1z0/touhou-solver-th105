@@ -194,6 +194,32 @@ def _native_guard_response(attack_flags: int, learned: str) -> str:
     return learned
 
 
+def _demonstration_frames(pattern: str, toward: str) -> list[set[str]]:
+    """Decode a bounded facing-normalized human input pattern."""
+    back = "left" if toward == "right" else "right"
+    mapping = {"toward": toward, "back": back}
+    allowed = {"up", "down", "z", "x", "c", "a", "toward", "back"}
+    frames: list[set[str]] = []
+    for raw_run in pattern.split(",")[:64]:
+        chord, separator, raw_count = raw_run.rpartition("@")
+        if not separator:
+            return []
+        try:
+            count = int(raw_count)
+        except ValueError:
+            return []
+        if not 1 <= count <= 60:
+            return []
+        names = set() if chord == "neutral" else set(chord.split("+"))
+        if not names <= allowed:
+            return []
+        keys = {mapping.get(name, name) for name in names}
+        frames.extend([set(keys) for _ in range(count)])
+        if len(frames) > 180:
+            return []
+    return frames
+
+
 class SakuyaAdaptivePolicy:
     api_version = POLICY_API_VERSION
     name = "sakuya-adaptive-v1"
@@ -234,6 +260,8 @@ class SakuyaAdaptivePolicy:
         self.projectile_knowledge_seeded = False
         self.defense_knowledge_seeded = False
         self.offense_knowledge_seeded = False
+        self.human_knowledge_seeded = False
+        self.human_demonstrations: dict[str, object] = {}
         self.last_damage_frame = -10000
         self.last_damage_context: dict[str, object] = {}
         self.defense_motion_issued = False
@@ -347,6 +375,83 @@ class SakuyaAdaptivePolicy:
         self.counts[f"{prefix}_attempts:{combo.name}"] += 1
         return self.queue.popleft(), f"{prefix}:{combo.name}"
 
+    def _start_human_demonstration(
+        self,
+        observation: PolicyObservation,
+        toward: str,
+    ) -> tuple[set[str], str] | None:
+        me, enemy = observation.state.p1, observation.state.p2
+        context = combat_context(
+            distance=abs(enemy.x - me.x),
+            enemy_y=enemy.y,
+            enemy_x=enemy.x,
+            phase="reaction",
+        )
+        chains = self.human_demonstrations.get("chains", {})
+        if not isinstance(chains, dict):
+            return None
+        viable: list[tuple[float, str, str, int]] = []
+        spirit = int(getattr(me, "spirit", 1000))
+        prefix = context.rsplit(":", 1)[0]
+        for source_context, context_penalty in (
+            (context, 0.0),
+            (f"{prefix}:neutral", 100.0),
+        ):
+            row = chains.get(source_context, {})
+            if not isinstance(row, dict):
+                continue
+            for signature, raw in row.items():
+                if not isinstance(raw, dict):
+                    continue
+                trials = max(1, int(raw.get("trials", 0)))
+                connections = int(raw.get("connections", 0))
+                if connections <= 0:
+                    continue
+                average_damage = float(raw.get("total_damage", 0)) / trials
+                average_self_damage = float(raw.get("total_self_damage", 0)) / trials
+                average_spirit = float(raw.get("total_spirit_cost", 0)) / trials
+                average_duration = float(raw.get("total_duration", 0)) / trials
+                if average_spirit > max(0, spirit - 200):
+                    continue
+                patterns = raw.get("input_patterns", {})
+                if not isinstance(patterns, dict) or not patterns:
+                    continue
+                pattern, support = max(
+                    ((str(value), int(count)) for value, count in patterns.items()),
+                    key=lambda item: item[1],
+                )
+                score = (
+                    average_damage
+                    - 1.5 * average_self_damage
+                    - 0.2 * average_spirit
+                    - 1.5 * average_duration
+                    + min(5, support) * 40.0
+                    - context_penalty
+                )
+                viable.append((score, str(signature), pattern, connections))
+        if not viable:
+            return None
+        _score, signature, pattern, _connections = max(viable)
+        frames = _demonstration_frames(pattern, toward)
+        if not frames:
+            return None
+        label = f"human:{signature}"
+        self.queue.extend(frames)
+        self.offense_outcomes.begin(
+            label,
+            context,
+            frame=observation.frame,
+            commitment=len(frames) + 18,
+            enemy_hp=enemy.hp,
+            me_hp=me.hp,
+            spirit=spirit,
+        )
+        self.combo_target_hp = enemy.hp
+        self.combo_confirm_deadline = observation.frame + min(24, len(frames))
+        self.attack_cooldown = min(120, len(frames) + 24)
+        self.counts[f"human_demo_attempts:{signature}"] += 1
+        return self.queue.popleft(), f"human-punish:{signature}"
+
     def _safe_to_commit_skill(
         self,
         observation: PolicyObservation,
@@ -449,6 +554,12 @@ class SakuyaAdaptivePolicy:
                 getattr(observation, "prior_offense_model", {}) or {}
             )
             self.offense_knowledge_seeded = True
+        if not self.human_knowledge_seeded:
+            prior_human = getattr(observation, "prior_human_demonstrations", {})
+            self.human_demonstrations = (
+                prior_human if isinstance(prior_human, dict) else {}
+            )
+            self.human_knowledge_seeded = True
         if (
             observation.previous_state is not None
             and observation.previous_state.p1.hp <= 0 < me.hp
@@ -465,12 +576,14 @@ class SakuyaAdaptivePolicy:
             enemy_action=enemy.action_id,
             me_hp=me.hp,
             projectile_count=len(observation.enemy_projectiles),
+            active_hitbox=bool(getattr(enemy, "attack_boxes", ())),
         )
         self.own_action_model.observe(
             observation.frame,
             enemy_action=me.action_id,
             me_hp=enemy.hp,
             projectile_count=len(own_projectiles),
+            active_hitbox=bool(getattr(me, "attack_boxes", ())),
         )
         self.offense_outcomes.observe(
             frame=observation.frame,
@@ -495,13 +608,11 @@ class SakuyaAdaptivePolicy:
         ):
             self.guard_chain_until = max(self.guard_chain_until, observation.frame + 20)
             self.counts["guard_contacts"] += 1
-        enemy_recovered = (
+        confirmed_punish = 50 <= enemy.action_id < 200
+        soft_recovery_probe = (
             self.last_assessment.phase == "recovery"
-            and self.last_assessment.punish_window >= 10.0
-        ) or (
-            observation.previous_state is not None
-            and 300 <= observation.previous_state.p2.action_id < 700
-            and 50 <= enemy.action_id < 200
+            and self.last_assessment.confidence >= 0.75
+            and self.last_assessment.punish_window >= 8.0
         )
 
         melee_signature = (
@@ -918,12 +1029,27 @@ class SakuyaAdaptivePolicy:
         elif self.queue:
             keys = self.queue.popleft()
             intent = "sequence"
-        elif enemy_recovered and distance < 150 and me.action_id < 50:
-            selected = self._start_combo(observation, toward, punish=True)
+        elif confirmed_punish and distance < 150 and me.action_id < 50:
+            selected = self._start_human_demonstration(observation, toward)
+            if selected is None:
+                selected = self._start_combo(observation, toward, punish=True)
             if selected is None:
                 keys, intent = {back}, "punish-unavailable"
             else:
                 keys, intent = selected
+        elif (
+            soft_recovery_probe
+            and distance < 58.0
+            and me.action_id < 50
+            and self.attack_cooldown == 0
+            and not hazards
+        ):
+            # A learned recovery estimate is not as strong as native hitstun.
+            # Probe with one close A; never commit a full route on timing alone.
+            keys = {"z"}
+            intent = "soft-punish-probe"
+            self.attack_cooldown = 18
+            self.counts["soft_punish_probes"] += 1
         elif distance > 310:
             if spirit < 400:
                 keys = {back}

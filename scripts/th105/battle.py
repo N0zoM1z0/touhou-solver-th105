@@ -28,6 +28,7 @@ from .knowledge import (
 from .policy_api import PolicyObservation
 from .policy_loader import HotReloadPolicy
 from .telemetry import BoundedJsonlWriter
+from .human_learning import demonstrations_for
 from .win32 import ProcessReader
 
 
@@ -431,6 +432,14 @@ def run_adaptive_fight(
         offense_model_for(knowledge_path, opponent_key)
         if knowledge_path is not None else {}
     )
+    prior_human_demonstrations = (
+        demonstrations_for(
+            telemetry_path.with_name("th105_human_demonstrations.json"),
+            f"0x{state.p1.vtable:08X}",
+            opponent_key,
+        )
+        if telemetry_path is not None else {}
+    )
 
     telemetry = BoundedJsonlWriter(telemetry_path) if telemetry_path is not None else None
 
@@ -502,6 +511,7 @@ def run_adaptive_fight(
                     prior_projectile_model=prior_projectile_model,
                     prior_defense_model=prior_defense_model,
                     prior_offense_model=prior_offense_model,
+                    prior_human_demonstrations=prior_human_demonstrations,
                 )
             )
             last_intent = decision.intent

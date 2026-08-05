@@ -170,3 +170,21 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   defense armed across gaps in multi-hit pressure. Unambiguous native mid/low
   flags override the learned guard guess; the learner remains the fallback for
   ambiguous frames.
+
+## 2026-08-05 — read-only human offense demonstrations
+
+- **Implemented** `learn-human` refuses an installed input hook and performs no
+  focus or input calls. It observes native Sakuya action/sequence transitions,
+  command masks, matchup/context, hit startup, damage, self-damage, spirit use,
+  duration, direct cancel edges, and complete offensive chains.
+- **Implemented** physical inputs are normalized to `toward/back`, reduced to
+  run-length patterns, and capped per action/chain. Outcome tables contain only
+  bounded sufficient statistics: at most 32 patterns per row, 128 chain rows
+  per context, and 1024 cancel edges per matchup. No 60 FPS raw frame corpus is
+  retained.
+- **Implemented** successful human chains can seed autoplay only in a confirmed
+  opponent reaction window. Replay validates allowed keys/run lengths, mirrors
+  directions using current facing, preserves 200 spirit, and remains subject to
+  the ordinary hit-confirm abort, threat cancellation, and online outcome
+  learner. A merely inferred recovery window still permits only one close-A
+  probe, not a full demonstrated or built-in combo.

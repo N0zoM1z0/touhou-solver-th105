@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.policies.adaptive import _hazard_projectiles, _native_guard_response
+from th105.policies.adaptive import (
+    _demonstration_frames,
+    _hazard_projectiles,
+    _native_guard_response,
+)
 
 
 class AdaptiveNativeGeometryTests(unittest.TestCase):
@@ -40,6 +44,19 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertEqual(_native_guard_response(0x2, "low_guard"), "high_guard")
         self.assertEqual(_native_guard_response(0x4, "high_guard"), "low_guard")
         self.assertEqual(_native_guard_response(0x6, "high_guard"), "high_guard")
+
+    def test_human_pattern_replays_relative_to_current_facing(self) -> None:
+        frames = _demonstration_frames(
+            "down@1,down+toward@2,toward+x@1,neutral@2", "left"
+        )
+        self.assertEqual(frames[0], {"down"})
+        self.assertEqual(frames[1], {"down", "left"})
+        self.assertEqual(frames[3], {"left", "x"})
+        self.assertEqual(frames[-1], set())
+
+    def test_human_pattern_rejects_unbounded_or_unknown_input(self) -> None:
+        self.assertEqual(_demonstration_frames("toward+q@2", "right"), [])
+        self.assertEqual(_demonstration_frames("z@181", "right"), [])
 
 
 if __name__ == "__main__":

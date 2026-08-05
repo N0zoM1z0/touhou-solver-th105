@@ -33,6 +33,8 @@ class ModelCompilerTests(unittest.TestCase):
                                 "mean_total": 32.0,
                                 "projectile_samples": 2,
                                 "first_projectile": 9.0,
+                                "active_box_observations": 3,
+                                "first_active_box": 5.0,
                             }
                         },
                         "offense_outcomes": {
@@ -64,7 +66,7 @@ class ModelCompilerTests(unittest.TestCase):
             character["defense_choices"]["302:0"]["response"], "low_guard"
         )
         self.assertEqual(character["projectile_extents"]["810"], 48.0)
-        self.assertEqual(character["temporal_actions"]["500"]["danger_start"], 9.0)
+        self.assertEqual(character["temporal_actions"]["500"]["danger_start"], 5.0)
         self.assertEqual(
             character["offense_choices"]["close:ground:field:recovery"]["action"],
             "AAAA",

@@ -17,6 +17,9 @@ class ActionProfile:
     projectile_samples: int = 0
     first_projectile_frame: float = 0.0
     last_projectile_frame: float = 0.0
+    active_box_observations: int = 0
+    first_active_box_frame: float = 0.0
+    last_active_box_frame: float = 0.0
     maximum_observed_frame: int = 0
 
     @staticmethod
@@ -43,6 +46,15 @@ class ActionProfile:
         )
         self.last_projectile_frame = max(self.last_projectile_frame, float(elapsed))
 
+    def record_active_box(self, elapsed: int) -> None:
+        value = float(elapsed)
+        if self.active_box_observations == 0:
+            self.first_active_box_frame = value
+        else:
+            self.first_active_box_frame = min(self.first_active_box_frame, value)
+        self.active_box_observations += 1
+        self.last_active_box_frame = max(self.last_active_box_frame, value)
+
     @property
     def last_threat_frame(self) -> float | None:
         samples = []
@@ -50,7 +62,20 @@ class ActionProfile:
             samples.append(self.last_impact_frame)
         if self.projectile_samples:
             samples.append(self.last_projectile_frame)
+        if self.active_box_observations:
+            samples.append(self.last_active_box_frame)
         return max(samples, default=None)
+
+    @property
+    def first_threat_frame(self) -> float | None:
+        samples = []
+        if self.impact_samples:
+            samples.append(self.first_impact_frame)
+        if self.projectile_samples:
+            samples.append(self.first_projectile_frame)
+        if self.active_box_observations:
+            samples.append(self.first_active_box_frame)
+        return min(samples, default=None)
 
 
 @dataclass(frozen=True)
@@ -110,6 +135,9 @@ class OpponentActionModel:
                 projectile_samples=int(raw.get("projectile_samples", 0)),
                 first_projectile_frame=float(raw.get("first_projectile", 0.0)),
                 last_projectile_frame=float(raw.get("last_projectile", 0.0)),
+                active_box_observations=int(raw.get("active_box_observations", 0)),
+                first_active_box_frame=float(raw.get("first_active_box", 0.0)),
+                last_active_box_frame=float(raw.get("last_active_box", 0.0)),
             )
 
     @staticmethod
@@ -123,6 +151,7 @@ class OpponentActionModel:
         enemy_action: int,
         me_hp: int,
         projectile_count: int,
+        active_hitbox: bool = False,
     ) -> ActionAssessment:
         if enemy_action != self.last_enemy_action:
             if self.episode is not None:
@@ -147,6 +176,8 @@ class OpponentActionModel:
                 profile.record_impact(elapsed)
             if projectile_count > self.last_projectile_count:
                 profile.record_projectile(elapsed)
+            if active_hitbox:
+                profile.record_active_box(elapsed)
 
         self.last_me_hp = me_hp
         self.last_projectile_count = projectile_count
@@ -167,6 +198,7 @@ class OpponentActionModel:
         )
         remaining = max(0.0, estimated_total - elapsed)
         last_threat = profile.last_threat_frame
+        first_threat = profile.first_threat_frame
         confidence = min(1.0, (profile.completions + profile.impact_samples + profile.projectile_samples) / 4.0)
 
         if spell:
@@ -176,7 +208,7 @@ class OpponentActionModel:
             phase = "unknown"
             punish_window = 0.0
         elif elapsed <= last_threat + 2.0:
-            phase = "active" if elapsed >= max(0.0, min(profile.first_impact_frame or profile.first_projectile_frame, last_threat)) else "startup"
+            phase = "active" if elapsed >= max(0.0, first_threat or 0.0) else "startup"
             punish_window = 0.0
         else:
             phase = "recovery"
@@ -203,6 +235,9 @@ class OpponentActionModel:
                 "projectile_samples": profile.projectile_samples,
                 "first_projectile": profile.first_projectile_frame,
                 "last_projectile": profile.last_projectile_frame,
+                "active_box_observations": profile.active_box_observations,
+                "first_active_box": profile.first_active_box_frame,
+                "last_active_box": profile.last_active_box_frame,
             }
             for action_id, profile in self.profiles.items()
         }

@@ -79,6 +79,24 @@ python -m unittest discover -s tests -v
 python scripts/train_th105_models.py
 ```
 
+### Learning from human Sakuya play
+
+Stop `auto-arcade`, leave the exact supported game running, then start the
+read-only demonstration recorder from Windows Python:
+
+```bat
+run_th105_learn_human.bat
+```
+
+Play normally and press Ctrl+C when finished. This mode refuses to start while
+the injected input bridge is present; it never focuses the window or writes to
+the game. It stores bounded sufficient statistics plus facing-normalized,
+run-length-encoded input patterns in
+`runtime/th105_human_demonstrations.json`. The autoplay policy loads successful
+matchup/context chains as priors for confirmed punish windows, then continues
+scoring their real autoplay outcomes. Failed or unsafe demonstrations are not
+blindly preferred.
+
 Useful Windows diagnostics:
 
 ```bat
