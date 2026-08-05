@@ -17,6 +17,7 @@ from th105.battle import (
     FRAME_DATA_BOX_VECTOR_B,
     TerminalRoundTracker,
     boxes_world_envelope,
+    cold_start_offense_prior,
     local_box_to_world,
     read_frame_box_vector,
 )
@@ -101,6 +102,19 @@ class BootstrapBattleTests(unittest.TestCase):
     def test_terminal_tracker_ignores_cold_attach_to_dead_screen(self) -> None:
         tracker = TerminalRoundTracker()
         self.assertIsNone(tracker.observe(me_hp=0, enemy_hp=5000))
+
+    def test_cold_start_prior_keeps_actions_but_not_round_attribution(self) -> None:
+        original = {
+            "*": {"236B": {"trials": 4, "connections": 2}},
+            "__reward__": {
+                "version": 1,
+                "rounds": {"rounds": 3, "wins": 1, "losses": 2},
+            },
+        }
+        seeded = cold_start_offense_prior(original)
+        self.assertEqual(seeded["*"]["236B"]["trials"], 4)
+        self.assertEqual(seeded["__reward__"]["rounds"]["rounds"], 0)
+        self.assertEqual(original["__reward__"]["rounds"]["rounds"], 3)
 
 
 if __name__ == "__main__":

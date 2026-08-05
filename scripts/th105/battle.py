@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import math
+import copy
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
@@ -132,6 +133,24 @@ class TerminalRoundTracker:
             self.sequence += 1
             return self.sequence
         return None
+
+
+def cold_start_offense_prior(state: object) -> dict[str, object]:
+    """Reuse action evidence without attributing old rounds to a new context."""
+    if not isinstance(state, dict):
+        return {}
+    cloned = copy.deepcopy(state)
+    reward = cloned.get("__reward__")
+    if isinstance(reward, dict):
+        reward["rounds"] = {
+            "rounds": 0,
+            "wins": 0,
+            "losses": 0,
+            "draws": 0,
+            "total_remaining_hp_bp": 0,
+            "total_enemy_remaining_hp_bp": 0,
+        }
+    return cloned
 
 
 @dataclass(frozen=True)
@@ -474,10 +493,14 @@ def run_adaptive_fight(
         contextual_prior(defense_model_for)
         if knowledge_path is not None else {}
     )
-    prior_offense_model = (
-        contextual_prior(offense_model_for)
-        if knowledge_path is not None else {}
-    )
+    if knowledge_path is not None:
+        prior_offense_model = offense_model_for(knowledge_path, opponent_key)
+        if not prior_offense_model:
+            prior_offense_model = cold_start_offense_prior(
+                offense_model_for(knowledge_path, base_opponent_key)
+            )
+    else:
+        prior_offense_model = {}
     prior_attack_geometry = (
         contextual_prior(attack_geometry_for)
         if knowledge_path is not None else {}
