@@ -7,6 +7,14 @@ import time
 from pathlib import Path
 
 CORPUS_SCHEMA_VERSION = 1
+MODEL_FIELDS = (
+    "profiles",
+    "projectile_envelopes",
+    "defense_responses",
+    "offense_outcomes",
+    "attack_geometry",
+    "cancel_graph",
+)
 
 
 def load_knowledge(path: Path) -> dict[str, object]:
@@ -24,6 +32,22 @@ def load_knowledge(path: Path) -> dict[str, object]:
     ):
         raise ValueError(f"unsupported opponent knowledge format: {path}")
     return data
+
+
+def character_models_from_data(
+    data: object, character_key: str
+) -> dict[str, dict[str, object]]:
+    """Extract every model family from one already-parsed corpus snapshot."""
+    if not isinstance(data, dict):
+        return {name: {} for name in MODEL_FIELDS}
+    characters = data.get("characters", {})
+    entry = characters.get(character_key, {}) if isinstance(characters, dict) else {}
+    if not isinstance(entry, dict):
+        return {name: {} for name in MODEL_FIELDS}
+    return {
+        name: value if isinstance((value := entry.get(name, {})), dict) else {}
+        for name in MODEL_FIELDS
+    }
 
 
 def profiles_for(path: Path, character_key: str) -> dict[str, object]:

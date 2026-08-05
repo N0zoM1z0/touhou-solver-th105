@@ -49,6 +49,48 @@ class LearningEvaluationTests(unittest.TestCase):
         self.assertLessEqual(small[1], 1.0)
         self.assertLess(large[1] - large[0], small[1] - small[0])
 
+    def test_normalizes_legacy_outcomes_before_reporting(self) -> None:
+        legacy = {
+            "characters": {
+                "legacy": {
+                    "offense_outcomes": {
+                        "*": {
+                            "z": {
+                                "trials": 2,
+                                "connections": 1,
+                                "total_damage": 600,
+                                "total_self_damage": 200,
+                            }
+                        }
+                    },
+                    "defense_responses": {
+                        "300:0": {
+                            "guard": {
+                                "trials": 2,
+                                "successes": 1,
+                                "damage_events": 1,
+                                "total_damage": 500,
+                            }
+                        }
+                    },
+                }
+            }
+        }
+
+        report = evaluate_knowledge(legacy)["characters"]["legacy"]
+
+        self.assertEqual(report["offense"]["mean_damage_bp"], 300.0)
+        self.assertEqual(report["offense"]["mean_self_damage_bp"], 100.0)
+        self.assertEqual(report["defense"]["mean_damage_bp"], 250.0)
+        source = legacy["characters"]["legacy"]
+        self.assertNotIn(
+            "normalized_samples", source["offense_outcomes"]["*"]["z"]
+        )
+        self.assertNotIn(
+            "normalized_samples",
+            source["defense_responses"]["300:0"]["guard"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

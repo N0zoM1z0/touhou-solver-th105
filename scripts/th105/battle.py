@@ -20,13 +20,9 @@ from .constants import (
 from .menu import character_name, scene_id
 from .model_compiler import compile_knowledge_file
 from .knowledge import (
-    attack_geometry_for,
-    cancel_graph_for,
-    defense_model_for,
-    offense_model_for,
+    character_models_from_data,
+    load_knowledge,
     persist_character_models,
-    profiles_for,
-    projectile_model_for,
 )
 from .policy_api import PolicyObservation
 from .policy_loader import HotReloadPolicy
@@ -74,6 +70,7 @@ OBJECT_SELF = 0x168
 OBJECT_TARGET = 0x170
 OBJECT_MANAGER_ACTIVE_SENTINEL = 0x5C
 OBJECT_MANAGER_ACTIVE_COUNT = 0x60
+MODEL_CHECKPOINT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -473,42 +470,33 @@ def run_adaptive_fight(
     )
     base_opponent_key = f"0x{state.p2.vtable:08X}"
     opponent_key = f"{base_opponent_key}@{difficulty.casefold()}"
-    # Old checkpoints were difficulty-agnostic. They remain useful priors, but
-    # all new observations are stored under a difficulty-specific key so the
-    # CPU's distinct timing distributions do not get averaged together.
-    def contextual_prior(loader):
-        return loader(knowledge_path, opponent_key) or loader(
-            knowledge_path, base_opponent_key
-        )
-
-    prior_opponent_model = (
-        contextual_prior(profiles_for)
-        if knowledge_path is not None else {}
-    )
-    prior_projectile_model = (
-        contextual_prior(projectile_model_for)
-        if knowledge_path is not None else {}
-    )
-    prior_defense_model = (
-        contextual_prior(defense_model_for)
-        if knowledge_path is not None else {}
-    )
+    # Parse the growing JSON corpus once per encounter, then select all model
+    # families from the same snapshot. Older code reparsed it up to twelve times.
     if knowledge_path is not None:
-        prior_offense_model = offense_model_for(knowledge_path, opponent_key)
-        if not prior_offense_model:
-            prior_offense_model = cold_start_offense_prior(
-                offense_model_for(knowledge_path, base_opponent_key)
-            )
+        knowledge_snapshot = load_knowledge(knowledge_path)
+        contextual_models = character_models_from_data(
+            knowledge_snapshot, opponent_key
+        )
+        base_models = character_models_from_data(
+            knowledge_snapshot, base_opponent_key
+        )
     else:
-        prior_offense_model = {}
-    prior_attack_geometry = (
-        contextual_prior(attack_geometry_for)
-        if knowledge_path is not None else {}
-    )
-    prior_cancel_graph = (
-        contextual_prior(cancel_graph_for)
-        if knowledge_path is not None else {}
-    )
+        contextual_models = character_models_from_data({}, opponent_key)
+        base_models = character_models_from_data({}, base_opponent_key)
+
+    def contextual_prior(name: str) -> dict[str, object]:
+        return contextual_models[name] or base_models[name]
+
+    prior_opponent_model = contextual_prior("profiles")
+    prior_projectile_model = contextual_prior("projectile_envelopes")
+    prior_defense_model = contextual_prior("defense_responses")
+    prior_offense_model = contextual_models["offense_outcomes"]
+    if not prior_offense_model:
+        prior_offense_model = cold_start_offense_prior(
+            base_models["offense_outcomes"]
+        )
+    prior_attack_geometry = contextual_prior("attack_geometry")
+    prior_cancel_graph = contextual_prior("cancel_graph")
     prior_human_demonstrations: dict[str, object] = {}
     if telemetry_path is not None:
         human_source = telemetry_path.with_name("th105_human_demonstrations.json")
@@ -770,7 +758,7 @@ def run_adaptive_fight(
                     "plugin": compact_plugin_status(plugin.status()),
                 },
             )
-        if frames and frames % max(1, int(frame_hz * 10.0)) == 0:
+        if frames and frames % max(1, int(frame_hz * MODEL_CHECKPOINT_SECONDS)) == 0:
             if persist_current_models(compile_models=False):
                 emit(
                     "model-checkpoint",

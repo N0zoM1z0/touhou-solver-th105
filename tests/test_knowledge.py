@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from th105.knowledge import (
     attack_geometry_for,
     cancel_graph_for,
+    character_models_from_data,
     defense_model_for,
     offense_model_for,
     persist_character_models,
@@ -22,6 +23,30 @@ from th105.opponent_model import OpponentActionModel
 
 
 class OpponentKnowledgeTests(unittest.TestCase):
+    def test_extracts_all_model_families_from_one_snapshot(self) -> None:
+        models = character_models_from_data(
+            {
+                "characters": {
+                    "opponent": {
+                        "profiles": {"300": {"starts": 1}},
+                        "offense_outcomes": {"*": {"z": {"trials": 2}}},
+                        "cancel_graph": "invalid",
+                    }
+                }
+            },
+            "opponent",
+        )
+
+        self.assertEqual(models["profiles"]["300"]["starts"], 1)
+        self.assertEqual(models["offense_outcomes"]["*"]["z"]["trials"], 2)
+        self.assertEqual(models["cancel_graph"], {})
+        self.assertEqual(models["defense_responses"], {})
+
+    def test_snapshot_extraction_tolerates_invalid_roots(self) -> None:
+        self.assertTrue(
+            all(not value for value in character_models_from_data([], "x").values())
+        )
+
     def test_round_trip_and_model_seed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "models.json"

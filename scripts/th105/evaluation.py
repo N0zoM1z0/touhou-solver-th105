@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+from .defense_learning import DefenseResponseModel
+from .offense_learning import ActionOutcomeModel
 from .reward import upper_tail_mean_bp
 
 
@@ -41,7 +43,12 @@ def _sum_histograms(rows: list[dict[str, object]], name: str) -> list[int]:
 
 def evaluate_character(entry: object) -> dict[str, object]:
     raw = entry if isinstance(entry, dict) else {}
-    offense_state = raw.get("offense_outcomes", {})
+    # Evaluation must use the same lazy migration as the online agent. Reading
+    # legacy rows directly mixes raw TH105 HP/spirit totals with basis points
+    # and can make an otherwise healthy checkpoint look badly regressed.
+    offense_model = ActionOutcomeModel()
+    offense_model.import_state(raw.get("offense_outcomes", {}))
+    offense_state = offense_model.export_state()
     global_offense = (
         offense_state.get("*", {}) if isinstance(offense_state, dict) else {}
     )
@@ -64,7 +71,9 @@ def evaluate_character(entry: object) -> dict[str, object]:
     round_count = _integer(rounds, "rounds")
     wins = _integer(rounds, "wins")
 
-    defense_state = raw.get("defense_responses", {})
+    defense_model = DefenseResponseModel()
+    defense_model.import_state(raw.get("defense_responses", {}))
+    defense_state = defense_model.export_state()
     defense_rows: list[dict[str, object]] = []
     if isinstance(defense_state, dict):
         for response_map in defense_state.values():
