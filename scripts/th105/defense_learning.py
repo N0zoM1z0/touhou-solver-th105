@@ -52,6 +52,30 @@ class ResponseStats:
         )
 
 
+def normalize_legacy_response_stats(stats: ResponseStats) -> None:
+    """Backfill v1 basis-point evidence for imported TH105 raw trials."""
+    legacy_samples = max(0, stats.trials - stats.normalized_samples)
+    if legacy_samples <= 0:
+        return
+    residual_damage = max(0, stats.total_damage - stats.total_damage_bp)
+    residual_guard_bp = max(
+        0, stats.total_guard_cost * 10 - stats.total_guard_cost_bp
+    )
+    observed_damage_events = sum(stats.damage_histogram[1:])
+    legacy_damage_events = min(
+        legacy_samples, max(0, stats.damage_events - observed_damage_events)
+    )
+    stats.damage_histogram[0] += legacy_samples - legacy_damage_events
+    if legacy_damage_events:
+        mean_damage_bp = round(residual_damage / legacy_damage_events)
+        stats.damage_histogram[damage_bin_index(mean_damage_bp)] += (
+            legacy_damage_events
+        )
+    stats.total_damage_bp += residual_damage
+    stats.total_guard_cost_bp += residual_guard_bp
+    stats.normalized_samples += legacy_samples
+
+
 @dataclass
 class DefenseEpisode:
     signature: str
@@ -215,7 +239,7 @@ class DefenseResponseModel:
                     if isinstance(histogram, list) else [0] * 8
                 )
                 normalized_histogram += [0] * (8 - len(normalized_histogram))
-                row[str(response)] = ResponseStats(
+                stats = ResponseStats(
                     trials=int(raw.get("trials", 0)),
                     successes=int(raw.get("successes", 0)),
                     damage_events=int(raw.get("damage_events", 0)),
@@ -227,6 +251,8 @@ class DefenseResponseModel:
                     total_guard_cost_bp=int(raw.get("total_guard_cost_bp", 0)),
                     damage_histogram=normalized_histogram,
                 )
+                normalize_legacy_response_stats(stats)
+                row[str(response)] = stats
 
     def metrics(self) -> dict[str, object]:
         return {

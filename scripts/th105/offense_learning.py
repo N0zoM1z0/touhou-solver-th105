@@ -60,6 +60,36 @@ class ActionOutcomeStats:
         )
 
 
+def normalize_legacy_outcome_stats(stats: ActionOutcomeStats) -> None:
+    """Backfill raw TH105 samples before mixed old/new confidence diverges."""
+    legacy_samples = max(0, stats.trials - stats.normalized_samples)
+    if legacy_samples <= 0:
+        return
+    # The supported build uses 10000 HP and 1000 spirit: one raw HP point is
+    # one basis point, while one raw spirit point is ten basis points.
+    residual_damage = max(0, stats.total_damage - stats.total_damage_bp)
+    residual_self_damage = max(
+        0, stats.total_self_damage - stats.total_self_damage_bp
+    )
+    residual_spirit_bp = max(
+        0, stats.total_spirit_cost * 10 - stats.total_spirit_cost_bp
+    )
+    observed_nonzero = sum(stats.self_damage_histogram[1:])
+    legacy_punished = min(
+        legacy_samples, max(0, stats.punished_trials - observed_nonzero)
+    )
+    stats.self_damage_histogram[0] += legacy_samples - legacy_punished
+    if legacy_punished:
+        mean_punished_bp = round(residual_self_damage / legacy_punished)
+        stats.self_damage_histogram[damage_bin_index(mean_punished_bp)] += (
+            legacy_punished
+        )
+    stats.total_damage_bp += residual_damage
+    stats.total_self_damage_bp += residual_self_damage
+    stats.total_spirit_cost_bp += residual_spirit_bp
+    stats.normalized_samples += legacy_samples
+
+
 @dataclass
 class OffenseEpisode:
     label: str
@@ -157,7 +187,9 @@ class ActionOutcomeModel:
         self_damage = max(0, episode.start_me_hp - episode.me_hp)
         spirit_cost = max(0, episode.start_spirit - episode.spirit)
         commitment = max(1, frame - episode.start_frame)
-        for context in (episode.context, "*"):
+        # A generic caller may already use the global context. Do not apply the
+        # same outcome twice when contextual and global keys are identical.
+        for context in dict.fromkeys((episode.context, "*")):
             stats = self.table.setdefault(context, {}).setdefault(
                 episode.label, ActionOutcomeStats()
             )
@@ -220,7 +252,7 @@ class ActionOutcomeModel:
             if age > 600:
                 continue
             credit = 0.85 ** (age / 120.0)
-            for context in (recent.context, "*"):
+            for context in dict.fromkeys((recent.context, "*")):
                 stats = self.table.get(context, {}).get(recent.label)
                 if stats is None:
                     continue
@@ -288,7 +320,9 @@ class ActionOutcomeModel:
                         values[name] = float(raw.get(name, 0.0))
                     else:
                         values[name] = int(raw.get(name, 0))
-                row[str(label)] = ActionOutcomeStats(**values)
+                stats = ActionOutcomeStats(**values)
+                normalize_legacy_outcome_stats(stats)
+                row[str(label)] = stats
 
     def metrics(self) -> dict[str, object]:
         return {

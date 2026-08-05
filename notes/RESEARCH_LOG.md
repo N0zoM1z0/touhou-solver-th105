@@ -139,6 +139,13 @@ Additional IDA names/comments: `get_game_config`, `g_game_config`,
   These proxy metrics are diagnostic only; complete-round physical A/B remains
   authoritative except for hard compatibility, safety, crash, and latency
   failures. Future GPU replay/artifact details are in `OFFLINE_TRAINING.md`.
+- **Observed and corrected** difficulty-specific cold-start priors could contain
+  legacy raw trials plus newer normalized trials. The reward switched to the
+  normalized totals as soon as one v1 sample existed, while confidence still
+  counted every legacy trial. Import now backfills the missing HP/spirit basis
+  points and a conservative damage histogram before adding new samples. A live
+  Hard/Suika checkpoint confirmed migrated rows have `normalized_samples ==
+  trials` and preserve raw damage/self-damage exactly.
 
 ## 2026-08-05 — Sakuya move sources and hot policy boundary
 

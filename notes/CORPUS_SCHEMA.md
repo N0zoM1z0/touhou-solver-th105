@@ -43,8 +43,10 @@ cannot recover.
 
 ## Compatibility rules
 
-- Readers accept missing fields and reconstruct v1 normalization from TH105's
-  legacy 10000 HP / 1000 spirit scale.
+- Readers accept missing or partially mixed fields and reconstruct every legacy
+  trial's v1 normalization from TH105's 10000 HP / 1000 spirit scale before
+  adding new evidence. Trial confidence and normalized outcome mass therefore
+  cannot diverge after the first v1 sample.
 - New writers retain raw outcome components; they never store only Q, reward,
   logits, or an action rank.
 - Unknown additive fields are ignored by old readers.

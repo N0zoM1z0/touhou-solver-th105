@@ -62,6 +62,28 @@ class DefenseResponseTests(unittest.TestCase):
         )
         self.assertEqual(stats.normalized_samples, 1)
 
+    def test_legacy_trials_are_backfilled_to_basis_points(self) -> None:
+        model = DefenseResponseModel()
+        model.import_state(
+            {
+                "attack": {
+                    "high_guard": {
+                        "trials": 5,
+                        "successes": 3,
+                        "damage_events": 2,
+                        "total_damage": 500,
+                        "guard_events": 1,
+                        "total_guard_cost": 30,
+                    }
+                }
+            }
+        )
+        stats = model.table["attack"]["high_guard"]
+        self.assertEqual(stats.normalized_samples, 5)
+        self.assertEqual(stats.total_damage_bp, 500)
+        self.assertEqual(stats.total_guard_cost_bp, 300)
+        self.assertEqual(sum(stats.damage_histogram), 5)
+
     def test_tail_risk_breaks_equal_mean_damage_tie(self) -> None:
         model = DefenseResponseModel()
         for damage in (250, 250, 250, 250, 250):

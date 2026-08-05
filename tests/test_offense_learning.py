@@ -79,8 +79,39 @@ class ActionOutcomeTests(unittest.TestCase):
     def test_old_raw_checkpoint_remains_usable(self) -> None:
         model = ActionOutcomeModel()
         model.import_state({"ctx": {"legacy": {"trials": 2, "total_damage": 600}}})
-        self.assertEqual(model.table["ctx"]["legacy"].normalized_samples, 0)
+        self.assertEqual(model.table["ctx"]["legacy"].normalized_samples, 2)
+        self.assertEqual(model.table["ctx"]["legacy"].total_damage_bp, 600)
         self.assertGreater(model.adjustment("legacy", "ctx"), -1200.0)
+
+    def test_legacy_evidence_survives_a_new_normalized_whiff(self) -> None:
+        model = ActionOutcomeModel()
+        model.import_state(
+            {
+                "*": {
+                    "legacy": {
+                        "trials": 4,
+                        "connections": 2,
+                        "total_damage": 600,
+                        "total_self_damage": 300,
+                        "punished_trials": 1,
+                        "total_spirit_cost": 20,
+                    }
+                }
+            }
+        )
+        stats = model.table["*"]["legacy"]
+        self.assertEqual(stats.normalized_samples, 4)
+        self.assertEqual(stats.total_damage_bp, 600)
+        self.assertEqual(stats.total_self_damage_bp, 300)
+        self.assertEqual(stats.total_spirit_cost_bp, 200)
+        self.assertEqual(sum(stats.self_damage_histogram), 4)
+        model.begin(
+            "legacy", "*", frame=10, commitment=1,
+            enemy_hp=10000, me_hp=10000, spirit=1000,
+        )
+        model.observe(frame=11, enemy_hp=10000, me_hp=10000, spirit=1000)
+        self.assertEqual(stats.normalized_samples, 5)
+        self.assertEqual(stats.total_damage_bp, 600)
 
 
 if __name__ == "__main__":
