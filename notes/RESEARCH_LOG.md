@@ -257,3 +257,9 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   `run_th105_overnight.bat` provide an unattended curriculum. Encounter
   boundaries checkpoint and compile cumulative per-opponent timing, projectile,
   defense, and offense aggregates; bounded telemetry continues rotating.
+- **Implemented/validated** native hazard ABI 6 adds acceleration to every
+  candidate movement path. Jump and super-jump candidates now follow a gravity
+  parabola through ascent, apex, and descent instead of being projected upward
+  forever; dash and controlled flight remain linear. A Windows-side parity
+  probe loaded the rebuilt native DLL and matched the Python reference to
+  `2.8e-7` clearance units on mixed ballistic/linear candidates.

@@ -31,6 +31,8 @@ class MovementCandidate:
     startup_frames: int = 0
     center_offset_x: float = 0.0
     center_offset_y: float = 0.0
+    acceleration_x: float = 0.0
+    acceleration_y: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -86,11 +88,13 @@ def evaluate_paths_reference(
             x = (
                 player_x
                 + candidate.velocity_x * movement_frame
+                + 0.5 * candidate.acceleration_x * movement_frame * movement_frame
                 + (candidate.center_offset_x if pose_active else 0.0)
             )
             y = (
                 player_y
                 + candidate.velocity_y * movement_frame
+                + 0.5 * candidate.acceleration_y * movement_frame * movement_frame
                 + (candidate.center_offset_y if pose_active else 0.0)
             )
             if (
@@ -122,11 +126,15 @@ def evaluate_paths_reference(
                 final_x=(
                     player_x
                     + candidate.velocity_x * max(0, horizon - candidate.startup_frames)
+                    + 0.5 * candidate.acceleration_x
+                    * max(0, horizon - candidate.startup_frames) ** 2
                     + candidate.center_offset_x
                 ),
                 final_y=(
                     player_y
                     + candidate.velocity_y * max(0, horizon - candidate.startup_frames)
+                    + 0.5 * candidate.acceleration_y
+                    * max(0, horizon - candidate.startup_frames) ** 2
                     + candidate.center_offset_y
                 ),
             )
@@ -157,6 +165,8 @@ class _Candidate(ctypes.Structure):
         ("startup_frames", ctypes.c_int32),
         ("center_offset_x", ctypes.c_float),
         ("center_offset_y", ctypes.c_float),
+        ("acceleration_x", ctypes.c_float),
+        ("acceleration_y", ctypes.c_float),
     )
 
 
@@ -171,7 +181,7 @@ class _Result(ctypes.Structure):
 
 
 class NativeHazardKernel:
-    ABI_VERSION = 5
+    ABI_VERSION = 6
 
     def __init__(self, path: Path | None = None) -> None:
         if os.name != "nt":
@@ -227,6 +237,8 @@ class NativeHazardKernel:
                     item.startup_frames,
                     item.center_offset_x,
                     item.center_offset_y,
+                    item.acceleration_x,
+                    item.acceleration_y,
                 )
                 for item in candidates
             )

@@ -19,7 +19,8 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
 - Fighter/action/pose/frame, HP, spirit, facing, velocity, native per-frame
   hurt/attack boxes, and active projectile sensing from read-only process memory.
 - A C++ finite-horizon projectile evaluator with exact current-frame AABBs,
-  acceleration, movement startup, graze windows, and a Python parity fallback.
+  projectile and movement acceleration, movement startup, graze windows, and a
+  Python parity fallback.
 - Per-opponent action timing, projectile envelope, guard response, and offense
   outcome learning using bounded sufficient statistics and a lightweight
   contextual-bandit explorer rather than a neural network or heavyweight RL

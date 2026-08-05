@@ -68,6 +68,8 @@ def _movement_candidate(
     startup_frames: int = 0,
     center_offset_x: float = 0.0,
     center_offset_y: float = 0.0,
+    acceleration_x: float = 0.0,
+    acceleration_y: float = 0.0,
 ) -> MovementCandidate:
     """Remain hot-loadable in a shell that cached hazard ABI 1.
 
@@ -85,6 +87,8 @@ def _movement_candidate(
             startup_frames=startup_frames,
             center_offset_x=center_offset_x,
             center_offset_y=center_offset_y,
+            acceleration_x=acceleration_x,
+            acceleration_y=acceleration_y,
         )
     except TypeError:
         try:
@@ -1073,9 +1077,9 @@ class SakuyaAdaptivePolicy:
                     ),
                     ("backdash", _movement_candidate(-direction * 13.0, 0.0, graze_frames=8, startup_frames=4)),
                     ("forward-dash", _movement_candidate(direction * 13.0, 0.0, graze_frames=8, startup_frames=4)),
-                    ("jump", _movement_candidate(0.0, 11.0, startup_frames=1)),
-                    ("superjump-back", _movement_candidate(-direction * 7.0, 13.0, graze_frames=8, startup_frames=3)),
-                    ("superjump-forward", _movement_candidate(direction * 7.0, 13.0, graze_frames=8, startup_frames=3)),
+                    ("jump", _movement_candidate(0.0, 11.0, startup_frames=1, acceleration_y=-0.65)),
+                    ("superjump-back", _movement_candidate(-direction * 7.0, 13.0, graze_frames=8, startup_frames=3, acceleration_y=-0.65)),
+                    ("superjump-forward", _movement_candidate(direction * 7.0, 13.0, graze_frames=8, startup_frames=3, acceleration_y=-0.65)),
                 )
             else:
                 labeled_candidates = (

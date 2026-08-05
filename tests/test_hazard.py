@@ -117,6 +117,26 @@ class HazardReferenceTests(unittest.TestCase):
         self.assertFalse(crouching.safe)
         self.assertEqual(crouching.final_y, 30.0)
 
+    def test_candidate_acceleration_models_jump_apex_and_descent(self) -> None:
+        projectile = HazardProjectile(0.0, 40.0, 0.0, 0.0, 5.0, 5.0)
+        linear, ballistic = evaluate_paths_reference(
+            0.0,
+            0.0,
+            5.0,
+            5.0,
+            (projectile,),
+            (
+                MovementCandidate(0.0, 10.0),
+                MovementCandidate(0.0, 10.0, acceleration_y=-2.0),
+            ),
+            horizon=10,
+        )
+        self.assertFalse(linear.safe)
+        self.assertTrue(ballistic.safe)
+        self.assertEqual(linear.final_y, 100.0)
+        self.assertEqual(ballistic.final_y, 0.0)
+        self.assertLess(ballistic.final_y, linear.final_y)
+
 
 if __name__ == "__main__":
     unittest.main()

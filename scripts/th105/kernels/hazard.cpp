@@ -31,6 +31,8 @@ struct Candidate {
     std::int32_t startupFrames;
     float centerOffsetX;
     float centerOffsetY;
+    float accelerationX;
+    float accelerationY;
 };
 
 struct RiskResult {
@@ -75,7 +77,7 @@ bool finiteProjectile(const Projectile& projectile) {
 }  // namespace
 
 TH105_EXPORT std::int32_t th105_hazard_abi_version() {
-    return 5;
+    return 6;
 }
 
 TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
@@ -113,6 +115,8 @@ TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
             || !std::isfinite(candidate.halfHeight)
             || !std::isfinite(candidate.centerOffsetX)
             || !std::isfinite(candidate.centerOffsetY)
+            || !std::isfinite(candidate.accelerationX)
+            || !std::isfinite(candidate.accelerationY)
             || candidate.halfWidth < 0.0F || candidate.halfHeight < 0.0F
             || candidate.grazeFrames < 0 || candidate.grazeFrames > horizon
             || candidate.startupFrames < 0 || candidate.startupFrames > horizon) return -3;
@@ -120,21 +124,31 @@ TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
             ? candidate.halfWidth : playerHalfWidth;
         const float candidateHalfHeight = candidate.halfHeight > 0.0F
             ? candidate.halfHeight : playerHalfHeight;
+        const float finalMovementFrame = static_cast<float>(
+            std::max(0, horizon - candidate.startupFrames)
+        );
         RiskResult result{
             1,
             -1,
             std::numeric_limits<float>::infinity(),
-            playerX + candidate.velocityX * static_cast<float>(horizon - candidate.startupFrames)
+            playerX + candidate.velocityX * finalMovementFrame
+                + 0.5F * candidate.accelerationX
+                    * finalMovementFrame * finalMovementFrame
                 + candidate.centerOffsetX,
-            playerY + candidate.velocityY * static_cast<float>(horizon - candidate.startupFrames)
+            playerY + candidate.velocityY * finalMovementFrame
+                + 0.5F * candidate.accelerationY
+                    * finalMovementFrame * finalMovementFrame
                 + candidate.centerOffsetY,
         };
         for (std::int32_t frame = 1; frame <= horizon; ++frame) {
             const std::int32_t movementFrame = std::max(0, frame - candidate.startupFrames);
             const bool poseActive = frame > candidate.startupFrames;
-            const float x = playerX + candidate.velocityX * static_cast<float>(movementFrame)
+            const float movementTime = static_cast<float>(movementFrame);
+            const float x = playerX + candidate.velocityX * movementTime
+                + 0.5F * candidate.accelerationX * movementTime * movementTime
                 + (poseActive ? candidate.centerOffsetX : 0.0F);
-            const float y = playerY + candidate.velocityY * static_cast<float>(movementFrame)
+            const float y = playerY + candidate.velocityY * movementTime
+                + 0.5F * candidate.accelerationY * movementTime * movementTime
                 + (poseActive ? candidate.centerOffsetY : 0.0F);
             if (frame > candidate.startupFrames
                 && frame <= candidate.startupFrames + candidate.grazeFrames) continue;
