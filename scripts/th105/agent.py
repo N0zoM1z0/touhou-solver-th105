@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from .injected_input import InjectedInputBridge, InjectedKeyboard
 from .injected_input import HOOK_ADDRESS, HOOK_ORIGINAL
 from .human_learning import HumanDemonstrationRecorder, compile_human_file
 from .combo import parse_combo, play_combo
+from .controller_lock import ControllerAlreadyRunning, ControllerLock
 from .difficulty import DifficultyCurriculum
 from .battle import (
     TerminalRoundTracker,
@@ -730,4 +732,18 @@ def main(argv: list[str] | None = None) -> int:
         args.telemetry_path = args.telemetry_path.resolve()
     if hasattr(args, "output_path"):
         args.output_path = args.output_path.resolve()
-    return int(args.func(args))
+    if args.command not in {"tap", "hold", "combo", "fight", "auto-arcade"}:
+        return int(args.func(args))
+    lock_path = (
+        args.telemetry_path.with_name("th105_controller.lock")
+        if hasattr(args, "telemetry_path")
+        else Path(__file__).resolve().parents[2]
+        / "runtime"
+        / "th105_controller.lock"
+    )
+    try:
+        with ControllerLock(lock_path, command=args.command):
+            return int(args.func(args))
+    except ControllerAlreadyRunning as exc:
+        print(f"refusing concurrent controller: {exc}", file=sys.stderr)
+        return 2

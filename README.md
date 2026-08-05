@@ -93,7 +93,8 @@ For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
 `auto-arcade --launch --p1-character sakuya --continuous`. Each completed
 encounter atomically checkpoints its per-opponent model, with an additional
 60-second crash-recovery checkpoint; Ctrl+C restores the input bridge before
-exit. Neutral offense uses a bounded contextual bandit: it
+exit. A process lock rejects a second input controller before it can compete
+for keys or model checkpoints. Neutral offense uses a bounded contextual bandit: it
 tries short `toward+Z`, `toward+A+Z/X/C`, and rising-Z probes, measures damage,
 self-damage, spirit cost, and commitment, exploits good results, and retains a
 shrinking exploration bonus. This works without a human corpus; demonstrations
