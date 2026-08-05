@@ -18,7 +18,14 @@ from .constants import (
 from .input import KEYS, VIRTUAL_KEYS, Keyboard
 from .injected_input import InjectedInputBridge, InjectedKeyboard
 from .combo import parse_combo, play_combo
-from .battle import battle_state_json, read_battle_state, run_adaptive_fight, run_bootstrap_fight
+from .battle import (
+    battle_state_json,
+    inspect_frame_boxes,
+    read_active_projectiles,
+    read_battle_state,
+    run_adaptive_fight,
+    run_bootstrap_fight,
+)
 from .menu import (
     CHARACTERS,
     enter_arcade_battle,
@@ -62,6 +69,44 @@ def probe(args: argparse.Namespace) -> int:
     reader, identity = open_target(api, args.game_dir)
     try:
         controller = reader.u32(ADDR_SCENE_CONTROLLER)
+        battle = (
+            read_battle_state(reader)
+            if scene_id(reader) == 5 and reader.u32(0x006E6244)
+            else None
+        )
+        projectile_probe: dict[str, object] | None = None
+        if battle is not None:
+            p1_projectiles = read_active_projectiles(reader, battle.p1, battle.p2)
+            p2_projectiles = read_active_projectiles(reader, battle.p2, battle.p1)
+            projectile_probe = {
+                "p1": [
+                    {
+                        **vars(item),
+                        "pointer": f"0x{item.pointer:08X}",
+                        "frame_data": f"0x{item.frame_data:08X}",
+                    }
+                    for item in p1_projectiles
+                ],
+                "p2": [
+                    {
+                        **vars(item),
+                        "pointer": f"0x{item.pointer:08X}",
+                        "frame_data": f"0x{item.frame_data:08X}",
+                    }
+                    for item in p2_projectiles
+                ],
+                "frame_data": {
+                    f"0x{frame_data:08X}": inspect_frame_boxes(reader, frame_data)
+                    for frame_data in {
+                        item.frame_data for item in (*p1_projectiles, *p2_projectiles)
+                    }
+                    if frame_data >= 0x10000
+                },
+                "fighter_frame_data": {
+                    "p1": inspect_frame_boxes(reader, battle.p1.frame_data),
+                    "p2": inspect_frame_boxes(reader, battle.p2.frame_data),
+                },
+            }
         state = {
             "scene_id": scene_id(reader),
             "requested_scene_id": reader.u32(ADDR_REQUESTED_ENGINE_SCENE),
@@ -94,11 +139,8 @@ def probe(args: argparse.Namespace) -> int:
                 ],
                 "source_count": reader.u32(ADDR_COMBINED_MENU_INPUT + 112),
             },
-            "battle": (
-                battle_state_json(read_battle_state(reader))
-                if scene_id(reader) == 5 and reader.u32(0x006E6244)
-                else None
-            ),
+            "battle": battle_state_json(battle) if battle is not None else None,
+            "projectiles": projectile_probe,
             "foreground": api.foreground_pid() == reader.pid,
             "windows": [
                 {

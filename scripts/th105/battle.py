@@ -61,6 +61,10 @@ FIGHTER_OBJECT_MANAGER = 0x658
 FIGHTER_COMMAND_MASK = 0x728
 
 FRAME_DATA_FLAGS = 0x4C
+FRAME_DATA_ATTACK_FLAGS = 0x50
+FRAME_DATA_BODY_BOX = 0x54
+FRAME_DATA_BOX_VECTOR_A = 0x5C
+FRAME_DATA_BOX_VECTOR_B = 0x6C
 
 OBJECT_SELF = 0x168
 OBJECT_TARGET = 0x170
@@ -82,11 +86,16 @@ class FighterState:
     action_pose: int
     action_frame: int
     frame_data_flags: int
+    attack_flags: int
     hp: int
     max_hp: int
     collision_state: int
     spirit: int
     command_mask: int
+    frame_data: int
+    body_box: tuple[int, int, int, int] | None
+    hurt_boxes: tuple[tuple[int, int, int, int], ...]
+    attack_boxes: tuple[tuple[int, int, int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -105,7 +114,122 @@ class ProjectileState:
     velocity_y: float
     acceleration_x: float
     acceleration_y: float
+    facing: int
     action_id: int
+    frame_data: int
+    attack_flags: int
+    body_box: tuple[int, int, int, int] | None
+    hurt_boxes: tuple[tuple[int, int, int, int], ...]
+    attack_boxes: tuple[tuple[int, int, int, int], ...]
+
+
+def _read_frame_box(
+    reader: ProcessReader, frame_data: int, field_offset: int
+) -> tuple[int, int, int, int] | None:
+    if frame_data < 0x10000:
+        return None
+    try:
+        pointer = reader.u32(frame_data + field_offset)
+        if pointer < 0x10000:
+            return None
+        box = tuple(reader.i32(pointer + offset) for offset in range(0, 16, 4))
+    except OSError:
+        return None
+    left, top, right, bottom = box
+    if left > right or top > bottom or any(abs(value) > 4096 for value in box):
+        return None
+    return box
+
+
+def read_frame_box_vector(
+    reader: ProcessReader, frame_data: int, field_offset: int
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Read one bounded std::vector-like array of four-int local rectangles."""
+    if frame_data < 0x10000:
+        return ()
+    try:
+        begin = reader.u32(frame_data + field_offset)
+        end = reader.u32(frame_data + field_offset + 4)
+        capacity = reader.u32(frame_data + field_offset + 8)
+    except OSError:
+        return ()
+    if begin < 0x10000 or end < begin or capacity < end:
+        return ()
+    byte_count = end - begin
+    if byte_count % 16 or byte_count > 16 * 32:
+        return ()
+    boxes: list[tuple[int, int, int, int]] = []
+    try:
+        for pointer in range(begin, end, 16):
+            box = tuple(reader.i32(pointer + offset) for offset in range(0, 16, 4))
+            left, top, right, bottom = box
+            if left > right or top > bottom or any(abs(value) > 4096 for value in box):
+                return ()
+            boxes.append(box)
+    except OSError:
+        return ()
+    return tuple(boxes)
+
+
+def local_box_to_world(
+    box: tuple[int, int, int, int],
+    *,
+    x: float,
+    y: float,
+    facing: int,
+) -> tuple[float, float, float, float]:
+    """Transform a local frame rectangle into game-coordinate world bounds.
+
+    TH105 stores local Y upward as negative while fighter/projectile positions
+    use positive Y above the floor.  Facing 1 preserves local X; the opposite
+    facing mirrors it around the object origin (matching 0x46ACD0).
+    """
+    left, top, right, bottom = box
+    if facing == 1:
+        x1, x2 = x + left, x + right
+    else:
+        x1, x2 = x - right, x - left
+    y1, y2 = y - bottom, y - top
+    return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+
+def boxes_world_envelope(
+    boxes: tuple[tuple[int, int, int, int], ...],
+    *,
+    x: float,
+    y: float,
+    facing: int,
+) -> tuple[float, float, float, float] | None:
+    if not boxes:
+        return None
+    world = tuple(local_box_to_world(box, x=x, y=y, facing=facing) for box in boxes)
+    return (
+        min(box[0] for box in world),
+        min(box[1] for box in world),
+        max(box[2] for box in world),
+        max(box[3] for box in world),
+    )
+
+
+def inspect_frame_boxes(reader: ProcessReader, frame_data: int) -> dict[str, object]:
+    """Bounded diagnostic scan for nearby frame-data rectangle pointers."""
+    if frame_data < 0x10000:
+        return {"dwords": {}, "candidate_boxes": {}}
+    dwords: dict[str, str] = {}
+    boxes: dict[str, tuple[int, int, int, int]] = {}
+    for offset in range(0x40, 0x84, 4):
+        value = reader.u32(frame_data + offset)
+        key = f"0x{offset:02X}"
+        dwords[key] = f"0x{value:08X}"
+        box = _read_frame_box(reader, frame_data, offset)
+        if box is not None:
+            boxes[key] = box
+    return {
+        "dwords": dwords,
+        "candidate_boxes": boxes,
+        "vector_a": read_frame_box_vector(reader, frame_data, FRAME_DATA_BOX_VECTOR_A),
+        "vector_b": read_frame_box_vector(reader, frame_data, FRAME_DATA_BOX_VECTOR_B),
+    }
 
 
 def _read_fighter(reader: ProcessReader, pointer: int) -> FighterState:
@@ -116,6 +240,7 @@ def _read_fighter(reader: ProcessReader, pointer: int) -> FighterState:
         raise RuntimeError(f"invalid fighter max HP {max_hp} at {pointer:#x}")
     frame_data = reader.u32(pointer + FIGHTER_CURRENT_FRAME_DATA)
     frame_data_flags = reader.u32(frame_data + FRAME_DATA_FLAGS) if frame_data >= 0x10000 else 0
+    attack_flags = reader.u32(frame_data + FRAME_DATA_ATTACK_FLAGS) if frame_data >= 0x10000 else 0
     return FighterState(
         pointer=pointer,
         vtable=reader.u32(pointer),
@@ -129,11 +254,16 @@ def _read_fighter(reader: ProcessReader, pointer: int) -> FighterState:
         action_pose=reader.u16(pointer + FIGHTER_ACTION_POSE),
         action_frame=reader.u16(pointer + FIGHTER_ACTION_FRAME),
         frame_data_flags=frame_data_flags,
+        attack_flags=attack_flags,
         hp=reader.u16(pointer + FIGHTER_HP),
         max_hp=max_hp,
         collision_state=reader.u32(pointer + FIGHTER_COLLISION_STATE),
         spirit=reader.i16(pointer + FIGHTER_SPIRIT),
         command_mask=reader.u32(pointer + FIGHTER_COMMAND_MASK),
+        frame_data=frame_data,
+        body_box=_read_frame_box(reader, frame_data, FRAME_DATA_BODY_BOX),
+        hurt_boxes=read_frame_box_vector(reader, frame_data, FRAME_DATA_BOX_VECTOR_A),
+        attack_boxes=read_frame_box_vector(reader, frame_data, FRAME_DATA_BOX_VECTOR_B),
     )
 
 
@@ -185,6 +315,7 @@ def read_active_projectiles(
             break
         obj = reader.u32(node + 8)
         action_id = reader.u16(obj + FIGHTER_ACTION_ID)
+        frame_data = reader.u32(obj + FIGHTER_CURRENT_FRAME_DATA)
         x = reader.f32(obj + FIGHTER_POSITION_X)
         y = reader.f32(obj + FIGHTER_POSITION_Y)
         if (
@@ -203,7 +334,20 @@ def read_active_projectiles(
                     velocity_y=reader.f32(obj + FIGHTER_VELOCITY_Y),
                     acceleration_x=reader.f32(obj + 0xFC),
                     acceleration_y=reader.f32(obj + 0x100),
+                    facing=reader.i8(obj + FIGHTER_FACING),
                     action_id=action_id,
+                    frame_data=frame_data,
+                    attack_flags=(
+                        reader.u32(frame_data + FRAME_DATA_ATTACK_FLAGS)
+                        if frame_data >= 0x10000 else 0
+                    ),
+                    body_box=_read_frame_box(reader, frame_data, FRAME_DATA_BODY_BOX),
+                    hurt_boxes=read_frame_box_vector(
+                        reader, frame_data, FRAME_DATA_BOX_VECTOR_A
+                    ),
+                    attack_boxes=read_frame_box_vector(
+                        reader, frame_data, FRAME_DATA_BOX_VECTOR_B
+                    ),
                 )
             )
         node = reader.u32(node)

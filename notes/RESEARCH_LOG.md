@@ -140,3 +140,33 @@ IDA names added: `g_battle_manager`, `g_battle_scene_renderer`,
   `+0x482` is the spirit threshold used before shots/skills, and `+0x728` is the
   decoded command mask. These are now included in fighter telemetry for
   action-synchronous combo tuning.
+
+## 2026-08-05 — native frame collision geometry and guard re-arming
+
+- **Observed (IDA/runtime)** `transform_local_aabb_to_world` (`0x0046ACD0`)
+  mirrors local X when facing is not `1`, adds actor X at `+0xEC`, and converts
+  local Y using actor Y at `+0xF0`. `resolve_fighter_body_collision`
+  (`0x0046C290`) consumes the current frame pointer at actor `+0x158` and the
+  single body/push rectangle at frame `+0x54`.
+- **Observed (runtime)** frame `+0x5C/+0x60/+0x64` and
+  `+0x6C/+0x70/+0x74` are bounded MSVC-vector triples of four-int local
+  rectangles. Idle Sakuya had one first-vector rectangle and no second-vector
+  rectangles. Active projectile frames had second-vector attack rectangles;
+  destructible projectiles could have the same rectangle in both vectors.
+- **Corroborated (public reverse-engineered layout)** SokuDev/SokuLib commit
+  `0794becf1f578b32329604483be2112fe0afd4ee` names these fields
+  `hurtBoxes` and `attackBoxes`, with `collisionBox` at `+0x54` and
+  `AttackFlags` at `+0x50`. Its flag layout identifies bit `0x2` as a mid hit
+  and `0x4` as a low hit. This is supporting evidence; the exact TH105 binary
+  and live values remain the authority for this project.
+- **Implemented** the sensing shell reads hurt/attack vectors every combat
+  frame. The policy transforms every active projectile attack rectangle to a
+  world-space hazard; an empty attack vector is an inactive animation frame,
+  not a collision threat. Player size/center now comes from the current native
+  hurt-box envelope rather than the former fixed `18x42` estimate.
+- **Implemented** native hazard ABI v5 adds candidate center offsets, allowing
+  crouch to model both its reduced height and downward center after startup.
+  A 20-frame guard-contact latch plus a 12-frame block/hit-stun latch keeps
+  defense armed across gaps in multi-hit pressure. Unambiguous native mid/low
+  flags override the learned guard guess; the learner remains the fallback for
+  ambiguous frames.

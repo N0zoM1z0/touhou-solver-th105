@@ -29,6 +29,8 @@ struct Candidate {
     float halfHeight;
     std::int32_t grazeFrames;
     std::int32_t startupFrames;
+    float centerOffsetX;
+    float centerOffsetY;
 };
 
 struct RiskResult {
@@ -73,7 +75,7 @@ bool finiteProjectile(const Projectile& projectile) {
 }  // namespace
 
 TH105_EXPORT std::int32_t th105_hazard_abi_version() {
-    return 4;
+    return 5;
 }
 
 TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
@@ -109,6 +111,8 @@ TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
             || !std::isfinite(candidate.velocityY)
             || !std::isfinite(candidate.halfWidth)
             || !std::isfinite(candidate.halfHeight)
+            || !std::isfinite(candidate.centerOffsetX)
+            || !std::isfinite(candidate.centerOffsetY)
             || candidate.halfWidth < 0.0F || candidate.halfHeight < 0.0F
             || candidate.grazeFrames < 0 || candidate.grazeFrames > horizon
             || candidate.startupFrames < 0 || candidate.startupFrames > horizon) return -3;
@@ -120,13 +124,18 @@ TH105_EXPORT std::int32_t th105_evaluate_linear_paths(
             1,
             -1,
             std::numeric_limits<float>::infinity(),
-            playerX + candidate.velocityX * static_cast<float>(horizon - candidate.startupFrames),
-            playerY + candidate.velocityY * static_cast<float>(horizon - candidate.startupFrames),
+            playerX + candidate.velocityX * static_cast<float>(horizon - candidate.startupFrames)
+                + candidate.centerOffsetX,
+            playerY + candidate.velocityY * static_cast<float>(horizon - candidate.startupFrames)
+                + candidate.centerOffsetY,
         };
         for (std::int32_t frame = 1; frame <= horizon; ++frame) {
             const std::int32_t movementFrame = std::max(0, frame - candidate.startupFrames);
-            const float x = playerX + candidate.velocityX * static_cast<float>(movementFrame);
-            const float y = playerY + candidate.velocityY * static_cast<float>(movementFrame);
+            const bool poseActive = frame > candidate.startupFrames;
+            const float x = playerX + candidate.velocityX * static_cast<float>(movementFrame)
+                + (poseActive ? candidate.centerOffsetX : 0.0F);
+            const float y = playerY + candidate.velocityY * static_cast<float>(movementFrame)
+                + (poseActive ? candidate.centerOffsetY : 0.0F);
             if (frame > candidate.startupFrames
                 && frame <= candidate.startupFrames + candidate.grazeFrames) continue;
             for (std::uint32_t projectileIndex = 0;

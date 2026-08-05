@@ -6,6 +6,7 @@ import math
 import time
 from collections import Counter, deque
 
+from ..battle import boxes_world_envelope, local_box_to_world
 from ..defense_learning import DefenseResponseModel
 from ..hazard import HazardEvaluator, HazardProjectile, MovementCandidate
 from ..motion import build_motion_frames
@@ -59,9 +60,12 @@ def _movement_candidate(
     velocity_x: float,
     velocity_y: float,
     *,
+    half_width: float = 0.0,
     half_height: float = 0.0,
     graze_frames: int = 0,
     startup_frames: int = 0,
+    center_offset_x: float = 0.0,
+    center_offset_y: float = 0.0,
 ) -> MovementCandidate:
     """Remain hot-loadable in a shell that cached hazard ABI 1.
 
@@ -73,9 +77,12 @@ def _movement_candidate(
         return MovementCandidate(
             velocity_x,
             velocity_y,
+            half_width=half_width,
             half_height=half_height,
             graze_frames=graze_frames,
             startup_frames=startup_frames,
+            center_offset_x=center_offset_x,
+            center_offset_y=center_offset_y,
         )
     except TypeError:
         try:
@@ -89,7 +96,9 @@ def _movement_candidate(
             return MovementCandidate(velocity_x, velocity_y)
 
 
-def _hazard_projectile(projectile, half_extent: float = 32.0) -> HazardProjectile:
+def _hazard_projectiles(
+    projectile, half_extent: float = 32.0
+) -> tuple[HazardProjectile, ...]:
     def sane(value: object, *, limit: float) -> float:
         value = float(value)
         return value if math.isfinite(value) and abs(value) <= limit else 0.0
@@ -98,24 +107,45 @@ def _hazard_projectile(projectile, half_extent: float = 32.0) -> HazardProjectil
     velocity_y = sane(projectile.velocity_y, limit=1000.0)
     acceleration_x = sane(getattr(projectile, "acceleration_x", 0.0), limit=100.0)
     acceleration_y = sane(getattr(projectile, "acceleration_y", 0.0), limit=100.0)
+    attack_boxes = getattr(projectile, "attack_boxes", None)
+    if attack_boxes is not None:
+        hazards: list[HazardProjectile] = []
+        for box in attack_boxes:
+            left, bottom, right, top = local_box_to_world(
+                box,
+                x=float(projectile.x),
+                y=float(projectile.y),
+                facing=int(getattr(projectile, "facing", 1)),
+            )
+            hazards.append(
+                HazardProjectile(
+                    (left + right) * 0.5,
+                    (bottom + top) * 0.5,
+                    velocity_x,
+                    velocity_y,
+                    half_width=(right - left) * 0.5,
+                    half_height=(top - bottom) * 0.5,
+                    acceleration_x=acceleration_x,
+                    acceleration_y=acceleration_y,
+                )
+            )
+        # Empty attack-box vectors are inactive animation frames, not hazards.
+        return tuple(hazards)
     try:
-        return HazardProjectile(
-            projectile.x,
-            projectile.y,
-            velocity_x,
-            velocity_y,
-            half_width=half_extent,
-            half_height=half_extent,
-            acceleration_x=acceleration_x,
-            acceleration_y=acceleration_y,
+        return (
+            HazardProjectile(
+                projectile.x,
+                projectile.y,
+                velocity_x,
+                velocity_y,
+                half_width=half_extent,
+                half_height=half_extent,
+                acceleration_x=acceleration_x,
+                acceleration_y=acceleration_y,
+            ),
         )
     except TypeError:
-        return HazardProjectile(
-            projectile.x,
-            projectile.y,
-            velocity_x,
-            velocity_y,
-        )
+        return (HazardProjectile(projectile.x, projectile.y, velocity_x, velocity_y),)
 
 
 def _reset_model_episode(model: OpponentActionModel) -> None:
@@ -151,6 +181,17 @@ SKILL_INPUT = {
     "214B": ("214", "x", "setup"),
     "214C": ("214", "c", "setup"),
 }
+
+
+def _native_guard_response(attack_flags: int, learned: str) -> str:
+    """Use frame-data guard type when it is unambiguous, else learned prior."""
+    mid_hit = bool(attack_flags & 0x2)
+    low_hit = bool(attack_flags & 0x4)
+    if low_hit and not mid_hit:
+        return "low_guard"
+    if mid_hit and not low_hit:
+        return "high_guard"
+    return learned
 
 
 class SakuyaAdaptivePolicy:
@@ -196,6 +237,7 @@ class SakuyaAdaptivePolicy:
         self.last_damage_frame = -10000
         self.last_damage_context: dict[str, object] = {}
         self.defense_motion_issued = False
+        self.guard_chain_until = 0
         self.hazard_calls = 0
         self.hazard_total_ns = 0
         self.hazard_max_ns = 0
@@ -228,11 +270,12 @@ class SakuyaAdaptivePolicy:
 
     def _hazards(self, projectiles) -> tuple[HazardProjectile, ...]:
         return tuple(
-            _hazard_projectile(
+            hazard
+            for projectile in projectiles
+            for hazard in _hazard_projectiles(
                 projectile,
                 self.projectile_envelopes.extent_for(projectile.action_id),
             )
-            for projectile in projectiles
         )
 
     def _decision(self, keys: set[str], intent: str) -> PolicyDecision:
@@ -415,6 +458,7 @@ class SakuyaAdaptivePolicy:
             self.queue.clear()
             self.evade_queue.clear()
             self.defense_responses.discard_episode()
+            self.guard_chain_until = 0
             self.counts["round_model_resets"] += 1
         self.last_assessment = self.opponent.observe(
             observation.frame,
@@ -434,10 +478,23 @@ class SakuyaAdaptivePolicy:
             me_hp=me.hp,
             spirit=spirit,
         )
-        enemy_attacking = self.last_assessment.phase in {
+        enemy_attacking = bool(getattr(enemy, "attack_boxes", ())) or self.last_assessment.phase in {
             "startup", "active", "unknown", "spell-danger"
         }
+        enemy_attack_flags = int(getattr(enemy, "attack_flags", 0))
         me_in_hit_reaction = 50 <= me.action_id < 200
+        previous_me = observation.previous_state.p1 if observation.previous_state else None
+        if me_in_hit_reaction:
+            # Block/hit stun is proof that the opponent's pressure is live.
+            # Keep guard armed through short neutral gaps in multi-hit strings.
+            self.guard_chain_until = max(self.guard_chain_until, observation.frame + 12)
+        if (
+            previous_me is not None
+            and me.hp >= previous_me.hp
+            and spirit < int(getattr(previous_me, "spirit", spirit))
+        ):
+            self.guard_chain_until = max(self.guard_chain_until, observation.frame + 20)
+            self.counts["guard_contacts"] += 1
         enemy_recovered = (
             self.last_assessment.phase == "recovery"
             and self.last_assessment.punish_window >= 10.0
@@ -448,7 +505,7 @@ class SakuyaAdaptivePolicy:
         )
 
         melee_signature = (
-            f"{enemy.action_id}:{enemy.action_sequence}"
+            f"{enemy.action_id}:{enemy.action_sequence}:g{enemy_attack_flags & 0x6}"
             if 300 <= enemy.action_id < 400 else None
         )
         active_defense = self.defense_responses.episode
@@ -507,6 +564,21 @@ class SakuyaAdaptivePolicy:
             self.counts["hit_confirms"] += 1
         self.last_enemy_hp = enemy.hp
 
+        hurt_envelope = boxes_world_envelope(
+            tuple(getattr(me, "hurt_boxes", ())),
+            x=me.x,
+            y=me.y,
+            facing=me.facing,
+        )
+        if hurt_envelope is None:
+            player_x, player_y = me.x, me.y + 42.0
+            player_half_width, player_half_height = 18.0, 42.0
+        else:
+            left, bottom, right, top = hurt_envelope
+            player_x, player_y = (left + right) * 0.5, (bottom + top) * 0.5
+            player_half_width = (right - left) * 0.5
+            player_half_height = (top - bottom) * 0.5
+
         took_damage = self.last_me_hp is not None and me.hp < self.last_me_hp
         previous_me_action = (
             observation.previous_state.p1.action_id
@@ -514,10 +586,10 @@ class SakuyaAdaptivePolicy:
         )
         learned_impact = self.projectile_envelopes.observe(
             observation.enemy_projectiles,
-            player_x=me.x,
-            player_y=me.y,
-            player_half_width=18.0,
-            player_half_height=42.0,
+            player_x=player_x,
+            player_y=player_y,
+            player_half_width=player_half_width,
+            player_half_height=player_half_height,
             took_damage=took_damage,
             first_contact=(
                 observation.frame - self.last_damage_frame > 24
@@ -590,22 +662,33 @@ class SakuyaAdaptivePolicy:
         airborne_threat = False
         nearest = math.inf
         evade_choice: str | None = None
-        for projectile in observation.enemy_projectiles:
-            dx = projectile.x - me.x
-            dy = projectile.y - me.y
+        hazards = self._hazards(observation.enemy_projectiles)
+        for projectile in hazards:
+            dx = projectile.x - player_x
+            dy = projectile.y - player_y
             nearest = min(nearest, math.hypot(dx, dy))
             moving_toward = dx * projectile.velocity_x < 0 or abs(projectile.velocity_x) < 0.2
             if abs(dx) < 260 and abs(dy) < 125 and moving_toward:
                 projectile_threat = True
                 airborne_threat |= projectile.y > me.y + 35
 
-        if observation.enemy_projectiles:
+        if hazards:
             direction = 1.0 if toward == "right" else -1.0
             grounded = me.y < 8.0
             if grounded:
                 labeled_candidates = (
                     ("stay", _movement_candidate(0.0, 0.0)),
-                    ("crouch", _movement_candidate(0.0, 0.0, half_height=24.0, startup_frames=1)),
+                    (
+                        "crouch",
+                        _movement_candidate(
+                            0.0,
+                            0.0,
+                            half_width=player_half_width,
+                            half_height=24.0,
+                            startup_frames=1,
+                            center_offset_y=(me.y + 24.0) - player_y,
+                        ),
+                    ),
                     ("backdash", _movement_candidate(-direction * 13.0, 0.0, graze_frames=8, startup_frames=4)),
                     ("forward-dash", _movement_candidate(direction * 13.0, 0.0, graze_frames=8, startup_frames=4)),
                     ("jump", _movement_candidate(0.0, 11.0, startup_frames=1)),
@@ -623,13 +706,12 @@ class SakuyaAdaptivePolicy:
                 )
             labels = tuple(label for label, _candidate in labeled_candidates)
             candidates = tuple(candidate for _label, candidate in labeled_candidates)
-            hazards = self._hazards(observation.enemy_projectiles)
             risk_horizon = 30
             risk = self._evaluate_hazard(
-                me.x,
-                me.y,
-                18.0,
-                42.0,
+                player_x,
+                player_y,
+                player_half_width,
+                player_half_height,
                 hazards,
                 candidates,
                 horizon=risk_horizon,
@@ -657,6 +739,9 @@ class SakuyaAdaptivePolicy:
                 evade_choice = max(eligible)[1]
             self.last_risk = {
                 "backend": self.hazard.backend,
+                "native_attack_boxes": len(hazards),
+                "player_half_width": player_half_width,
+                "player_half_height": player_half_height,
                 "best": evade_choice or "none",
                 **{
                     f"{label}_clearance": result.minimum_clearance
@@ -705,7 +790,9 @@ class SakuyaAdaptivePolicy:
             self.evade_queue.clear()
             keys = {back} if projectile_threat or enemy_attacking else set()
             intent = "skill-commit-guard" if keys else "skill-commit"
-        elif enemy_attacking and 300 <= enemy.action_id < 400:
+        elif 300 <= enemy.action_id < 400 and (
+            enemy_attacking or distance < 280.0
+        ):
             # Defense-first: a strike startup invalidates any not-yet-active
             # motion or dodge macro. Facing-based guard takes priority over all
             # queued offense and prevents the first hit of a full chain.
@@ -715,6 +802,7 @@ class SakuyaAdaptivePolicy:
                 self.defense_responses.episode.response
                 if self.defense_responses.episode is not None else "high_guard"
             )
+            response = _native_guard_response(enemy_attack_flags, response)
             mark_applied = getattr(self.defense_responses, "mark_applied", None)
             if callable(mark_applied):
                 mark_applied()
@@ -743,6 +831,20 @@ class SakuyaAdaptivePolicy:
                 low = response == "low_guard"
                 keys = {back, "down"} if low else {back}
                 intent = "strike-guard-low" if low else "strike-guard-high"
+        elif observation.frame <= self.guard_chain_until and (
+            distance < 280.0 or hazards or enemy_attacking
+        ):
+            # Do not release back between hits. Many strings briefly return to
+            # a non-active pose while the next hit is already buffered.
+            self.queue.clear()
+            response = (
+                self.defense_responses.episode.response
+                if self.defense_responses.episode is not None else "high_guard"
+            )
+            response = _native_guard_response(enemy_attack_flags, response)
+            low = response == "low_guard"
+            keys = {back, "down"} if low else {back}
+            intent = "guard-chain-low" if low else "guard-chain-high"
         elif self.evade_queue:
             keys = self.evade_queue.popleft()
             intent = "evade-sequence"

@@ -16,9 +16,10 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
   key release on exit, and post-cleanup verification.
 - Hot-reloadable combat policy; a bad generation rolls back without stopping the
   campaign.
-- Fighter/action/pose/frame, HP, spirit, facing, velocity, and active projectile
-  sensing from read-only process memory.
-- A C++ finite-horizon projectile evaluator with a Python parity fallback.
+- Fighter/action/pose/frame, HP, spirit, facing, velocity, native per-frame
+  hurt/attack boxes, and active projectile sensing from read-only process memory.
+- A C++ finite-horizon projectile evaluator with exact current-frame AABBs,
+  acceleration, movement startup, graze windows, and a Python parity fallback.
 - Per-opponent action timing, projectile envelope, guard response, and offense
   outcome learning using bounded sufficient statistics rather than a neural
   network or heavyweight RL runtime.

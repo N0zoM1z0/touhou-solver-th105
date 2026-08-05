@@ -90,6 +90,33 @@ class HazardReferenceTests(unittest.TestCase):
             )[0].safe
         )
 
+    def test_pose_center_offset_models_crouching_without_teleporting_startup(self) -> None:
+        projectile = HazardProjectile(0.0, 75.0, 0.0, 0.0, 10.0, 10.0)
+        standing, crouching = evaluate_paths_reference(
+            0.0,
+            80.0,
+            20.0,
+            40.0,
+            (projectile,),
+            (
+                MovementCandidate(0.0, 0.0),
+                MovementCandidate(
+                    0.0,
+                    0.0,
+                    half_width=20.0,
+                    half_height=20.0,
+                    startup_frames=1,
+                    center_offset_y=-50.0,
+                ),
+            ),
+            horizon=3,
+        )
+        self.assertFalse(standing.safe)
+        # Startup frame still overlaps, so an already-arrived hit cannot be
+        # dodged retroactively merely by selecting the crouch candidate.
+        self.assertFalse(crouching.safe)
+        self.assertEqual(crouching.final_y, 30.0)
+
 
 if __name__ == "__main__":
     unittest.main()

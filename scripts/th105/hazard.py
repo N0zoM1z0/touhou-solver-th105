@@ -29,6 +29,8 @@ class MovementCandidate:
     half_height: float = 0.0
     graze_frames: int = 0
     startup_frames: int = 0
+    center_offset_x: float = 0.0
+    center_offset_y: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -80,8 +82,17 @@ def evaluate_paths_reference(
         first_collision = -1
         for frame in range(1, horizon + 1):
             movement_frame = max(0, frame - candidate.startup_frames)
-            x = player_x + candidate.velocity_x * movement_frame
-            y = player_y + candidate.velocity_y * movement_frame
+            pose_active = frame > candidate.startup_frames
+            x = (
+                player_x
+                + candidate.velocity_x * movement_frame
+                + (candidate.center_offset_x if pose_active else 0.0)
+            )
+            y = (
+                player_y
+                + candidate.velocity_y * movement_frame
+                + (candidate.center_offset_y if pose_active else 0.0)
+            )
             if (
                 candidate.startup_frames < frame
                 <= candidate.startup_frames + candidate.graze_frames
@@ -108,8 +119,16 @@ def evaluate_paths_reference(
                 safe=first_collision < 0,
                 first_collision_frame=first_collision,
                 minimum_clearance=minimum,
-                final_x=player_x + candidate.velocity_x * max(0, horizon - candidate.startup_frames),
-                final_y=player_y + candidate.velocity_y * max(0, horizon - candidate.startup_frames),
+                final_x=(
+                    player_x
+                    + candidate.velocity_x * max(0, horizon - candidate.startup_frames)
+                    + candidate.center_offset_x
+                ),
+                final_y=(
+                    player_y
+                    + candidate.velocity_y * max(0, horizon - candidate.startup_frames)
+                    + candidate.center_offset_y
+                ),
             )
         )
     return tuple(results)
@@ -136,6 +155,8 @@ class _Candidate(ctypes.Structure):
         ("half_height", ctypes.c_float),
         ("graze_frames", ctypes.c_int32),
         ("startup_frames", ctypes.c_int32),
+        ("center_offset_x", ctypes.c_float),
+        ("center_offset_y", ctypes.c_float),
     )
 
 
@@ -150,7 +171,7 @@ class _Result(ctypes.Structure):
 
 
 class NativeHazardKernel:
-    ABI_VERSION = 4
+    ABI_VERSION = 5
 
     def __init__(self, path: Path | None = None) -> None:
         if os.name != "nt":
@@ -204,6 +225,8 @@ class NativeHazardKernel:
                     item.half_height,
                     item.graze_frames,
                     item.startup_frames,
+                    item.center_offset_x,
+                    item.center_offset_y,
                 )
                 for item in candidates
             )
