@@ -293,7 +293,8 @@ class Win32:
         return int(owner.value)
 
     def foreground_window(self) -> int:
-        return int(self.user32.GetForegroundWindow())
+        window = self.user32.GetForegroundWindow()
+        return int(window) if window else 0
 
     def restore_foreground(self, window: int, timeout: float = 3.0) -> None:
         if not window or not self.user32.IsWindow(window):

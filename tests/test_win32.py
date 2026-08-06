@@ -46,6 +46,16 @@ class _Kernel:
 
 
 class BackgroundLaunchTests(unittest.TestCase):
+    def test_null_foreground_window_is_reported_as_zero(self) -> None:
+        class User:
+            @staticmethod
+            def GetForegroundWindow():
+                return None
+
+        api = Win32.__new__(Win32)
+        api.user32 = User()
+        self.assertEqual(api.foreground_window(), 0)
+
     def test_background_launch_requests_show_without_activation(self) -> None:
         api = Win32.__new__(Win32)
         kernel = _Kernel()
