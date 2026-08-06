@@ -151,9 +151,10 @@ bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Background mode is strict from
 process creation onward: `auto-arcade --launch` creates the exact verified
 executable suspended and process-locally replaces `WS_EX_APPWINDOW` with
-`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` in its WinMain window style before
-resuming it. This keeps TH105 out of normal taskbar/Alt-Tab/fallback activation
-candidates when another game recreates its foreground window. The four-byte
+`WS_EX_NOACTIVATE` in its WinMain window style before resuming it. Removing the
+forced app-window eligibility keeps TH105 out of foreground fallback selection
+when another game recreates its window, while avoiding `WS_EX_TOOLWINDOW`
+keeps the visible top-level game window discoverable. The four-byte
 launch patch is guarded by the
 supported SHA-256 and original-byte preimage; it never changes the executable
 on disk, and any failure terminates only the exact newly created PID. Windows

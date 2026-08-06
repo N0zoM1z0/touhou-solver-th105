@@ -28,13 +28,13 @@ STARTF_USESHOWWINDOW = 0x00000001
 #   00664D95  push 00040000h       ; WS_EX_APPWINDOW
 #   00664D9A  call CreateWindowExA
 # A suspended background launch changes only the immediate operand in the new
-# process to replace APPWINDOW with WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW. The
-# tool-window bit also keeps TH105 out of taskbar/Alt-Tab/fallback activation
-# candidates when another controller destroys and recreates its foreground
-# window. The executable on disk is never modified.
+# process to replace APPWINDOW with WS_EX_NOACTIVATE. Removing the forced
+# app-window eligibility prevents fallback activation when another controller
+# destroys its foreground window, while avoiding TOOLWINDOW keeps the visible
+# top-level game window discoverable. The executable on disk is never modified.
 BACKGROUND_EXSTYLE_ADDRESS = 0x00664D96
 BACKGROUND_EXSTYLE_ORIGINAL = struct.pack("<I", 0x00040000)
-BACKGROUND_EXSTYLE_PATCHED = struct.pack("<I", 0x08000080)
+BACKGROUND_EXSTYLE_PATCHED = struct.pack("<I", 0x08000000)
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_EXTENDEDKEY = 0x0001
