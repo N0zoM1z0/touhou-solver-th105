@@ -221,6 +221,12 @@ def main() -> int:
             write_json(candidate_output / "result.json", run)
             write_json(output / "experiment.json", experiment)
             write_json(output / "current.json", {**run, "next": "pending"})
+    except Exception as exc:
+        experiment["status"] = "failed"
+        experiment["ended_at"] = time.time()
+        experiment["error"] = f"{type(exc).__name__}: {exc}"[:300]
+        write_json(output / "experiment.json", experiment)
+        raise
     finally:
         stop_game()
         restore_models(baseline, runtime)

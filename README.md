@@ -287,6 +287,9 @@ action or bypass native hazard, range, resource, startup, or recovery gates.
 Every option transition and sanitized encounter summary records the loaded
 offline-policy SHA-256. Physical A/B results therefore remain attributable even
 when several distilled artifacts are installed into the same runtime path.
+Exact context/action rows are preferred; unseen states may only back off to a
+bounded nearest row for the same difficulty, opponent, and action. The lookup
+is cached and remains behind all native legality and safety gates.
 
 Run a fair four-candidate physical screen with a fixed Lunatic difficulty and
 the same online-learner checkpoint for every candidate:

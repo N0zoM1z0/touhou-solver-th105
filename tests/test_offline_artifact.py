@@ -77,6 +77,58 @@ class OfflineArtifactTests(unittest.TestCase):
         self.assertAlmostEqual(score.adjustment, score.utility * 0.5)
         self.assertIsNone(policy.score("ctx", "214B"))
 
+    def test_bounded_backoff_stays_with_same_difficulty_opponent_and_action(self) -> None:
+        source = "lunatic:reimu@lunatic:far:ground:field:ea200:p0:h9-5"
+        data = {
+            "artifact_schema_version": 1,
+            "contexts": {
+                source: {
+                    "space-control-214C": {
+                        "support": 4,
+                        "outcomes": {"damage_bp": 500},
+                    }
+                },
+                "lunatic:marisa@lunatic:far:ground:field:ea200:p0:h10-8": {
+                    "space-control-214C": {
+                        "support": 100,
+                        "outcomes": {"damage_bp": 9000},
+                    }
+                },
+            },
+        }
+        policy = DistilledOutcomePolicy(data)
+        requested = "lunatic:reimu@lunatic:far:ground:field:ea200:p1-3:h10-8"
+        score = policy.score(requested, "space-control-214C")
+        self.assertIsNotNone(score)
+        assert score is not None
+        self.assertEqual(score.context, requested)
+        self.assertEqual(score.matched_context, source)
+        self.assertGreater(score.backoff_distance, 0.0)
+        self.assertEqual(policy.metrics()["backoff_hits"], 1)
+        self.assertIsNone(
+            policy.score(requested.replace("reimu", "sakuya"), "space-control-214C")
+        )
+
+    def test_backoff_rejects_distant_state(self) -> None:
+        data = {
+            "artifact_schema_version": 1,
+            "contexts": {
+                "lunatic:reimu@lunatic:close:air:corner:ea500:p9+:h0-0": {
+                    "space-control-214C": {
+                        "support": 10,
+                        "outcomes": {"damage_bp": 500},
+                    }
+                }
+            },
+        }
+        policy = DistilledOutcomePolicy(data)
+        self.assertIsNone(
+            policy.score(
+                "lunatic:reimu@lunatic:far:ground:field:ea200:p0:h10-10",
+                "space-control-214C",
+            )
+        )
+
     def test_loader_rejects_incompatible_game_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "policy.json"
