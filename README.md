@@ -177,6 +177,18 @@ into a compact context/action table. Training algorithm and runtime artifact are
 decoupled: native legality/hazard gates remain mandatory, while unknown or
 unsupported contexts fall back to the online contextual bandit.
 
+Install a returned bundle only after its manifest, model hash, and exact game
+build pass validation:
+
+```bash
+python scripts/install_th105_offline_policy.py --bundle policy-lunatic30
+```
+
+The installer atomically writes `runtime/th105_offline_policy.json`. A battle
+loads it at the next encounter boundary. Initially it only blends supported
+offline outcomes into already-safe skill ranking; it cannot create a legal
+action or bypass native hazard, range, resource, startup, or recovery gates.
+
 ### Learning from human Sakuya play
 
 Stop `auto-arcade`, leave the exact supported game running, then start the

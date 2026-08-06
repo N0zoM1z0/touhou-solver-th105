@@ -15,6 +15,7 @@ from ..hazard import HazardEvaluator, HazardProjectile, MovementCandidate
 from ..human_learning import human_demonstration_utility as _human_demonstration_utility
 from ..motion import build_motion_frames
 from ..offense_learning import ActionOutcomeModel, combat_context
+from ..offline_artifact import DistilledOutcomePolicy, live_distillation_context
 from ..opponent_model import ActionAssessment, OpponentActionModel
 from ..policy_api import POLICY_API_VERSION, PolicyDecision, PolicyObservation
 from ..projectile_model import ProjectileEnvelopeModel
@@ -392,6 +393,7 @@ class SakuyaAdaptivePolicy:
         self.offense_outcomes = ActionOutcomeModel()
         self.enemy_attack_geometry = AttackGeometryModel()
         self.cancel_graph = CancelGraphModel()
+        self.offline_policy = DistilledOutcomePolicy()
         self.cancel_cooldown = 0
         self.last_assessment = ActionAssessment(0, 0, "neutral", 0.0, 0.0, 0.0, False)
         self.last_tactical_scores: list[dict[str, float | str]] = []
@@ -405,6 +407,7 @@ class SakuyaAdaptivePolicy:
         self.human_knowledge_seeded = False
         self.attack_geometry_knowledge_seeded = False
         self.cancel_graph_knowledge_seeded = False
+        self.offline_knowledge_seeded = False
         self.human_demonstrations: dict[str, object] = {}
         self.last_human_demonstration: dict[str, object] = {}
         self.last_damage_frame = -10000
@@ -1021,6 +1024,14 @@ class SakuyaAdaptivePolicy:
                 getattr(observation, "prior_cancel_graph", {}) or {}
             )
             self.cancel_graph_knowledge_seeded = True
+        if not self.offline_knowledge_seeded:
+            prior_offline = getattr(observation, "prior_offline_policy", {})
+            if isinstance(prior_offline, dict) and prior_offline:
+                self.offline_policy = DistilledOutcomePolicy(prior_offline)
+                self.counts["offline_policy_contexts_loaded"] += len(
+                    self.offline_policy.contexts
+                )
+            self.offline_knowledge_seeded = True
         if (
             observation.previous_state is not None
             and observation.previous_state.p1.hp <= 0 < me.hp
@@ -1692,12 +1703,35 @@ class SakuyaAdaptivePolicy:
                     for item in ranked
                     if item.reason == "ok"
                 }
+                offline_scores: dict[str, float] = {}
+                if self.offline_policy.contexts:
+                    offline_context = live_distillation_context(
+                        difficulty=str(
+                            getattr(observation, "difficulty", "unknown")
+                        ),
+                        opponent=str(
+                            getattr(observation, "opponent_key", "unknown")
+                        ),
+                        state=observation.state,
+                        enemy_projectiles=tuple(observation.enemy_projectiles),
+                    )
+                    for item in ranked:
+                        if item.reason != "ok":
+                            continue
+                        offline = self.offline_policy.score(
+                            offline_context,
+                            f"space-control-{item.candidate.name}",
+                        )
+                        offline_scores[item.candidate.name] = (
+                            offline.adjustment if offline is not None else 0.0
+                        )
                 ranked = tuple(
                     sorted(
                         ranked,
                         key=lambda item: (
                             item.score
                             + 0.5 * learned_scores.get(item.candidate.name, 0.0)
+                            + 0.35 * offline_scores.get(item.candidate.name, 0.0)
                         ),
                         reverse=True,
                     )
@@ -1711,9 +1745,11 @@ class SakuyaAdaptivePolicy:
                         "startup": item.candidate.startup,
                         "commitment": item.candidate.commitment,
                         "learned_score": learned_scores.get(item.candidate.name),
+                        "offline_score": offline_scores.get(item.candidate.name),
                         "combined_score": (
                             item.score
                             + 0.5 * learned_scores.get(item.candidate.name, 0.0)
+                            + 0.35 * offline_scores.get(item.candidate.name, 0.0)
                         ),
                     }
                     for item in ranked
@@ -1889,6 +1925,7 @@ class SakuyaAdaptivePolicy:
             "opponent_model": self.opponent.metrics(),
             "own_action_model": self.own_action_model.metrics(),
             "tactical_scores": self.last_tactical_scores,
+            "offline_policy": self.offline_policy.metrics(),
             "performance": {
                 "hazard_calls": self.hazard_calls,
                 "hazard_average_us": (

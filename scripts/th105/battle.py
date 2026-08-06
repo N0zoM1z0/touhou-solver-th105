@@ -20,6 +20,7 @@ from .constants import (
 )
 from .menu import character_name, scene_id
 from .model_compiler import compile_knowledge_file
+from .offline_artifact import DistilledOutcomePolicy
 from .knowledge import (
     character_models_from_data,
     load_knowledge,
@@ -495,6 +496,22 @@ def run_adaptive_fight(
     )
     base_opponent_key = f"0x{state.p2.vtable:08X}"
     opponent_key = f"{base_opponent_key}@{difficulty.casefold()}"
+    prior_offline_policy: dict[str, object] = {}
+    offline_artifact_error: str | None = None
+    if telemetry_path is not None:
+        offline_path = telemetry_path.with_name("th105_offline_policy.json")
+        if offline_path.is_file():
+            try:
+                DistilledOutcomePolicy.load(
+                    offline_path,
+                    game_build_sha256=game_build_sha256,
+                    difficulty=difficulty,
+                )
+                loaded_offline = json.loads(offline_path.read_text(encoding="utf-8"))
+                if isinstance(loaded_offline, dict):
+                    prior_offline_policy = loaded_offline
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                offline_artifact_error = str(exc)[:160]
     # Parse the growing JSON corpus once per encounter, then select all model
     # families from the same snapshot. Older code reparsed it up to twelve times.
     if knowledge_path is not None:
@@ -574,6 +591,7 @@ def run_adaptive_fight(
                 "human_demonstrations": metrics.get("human_demonstrations"),
                 "attack_geometry": metrics.get("attack_geometry"),
                 "cancel_graph": metrics.get("cancel_graph"),
+                "offline_policy": metrics.get("offline_policy"),
                 "performance": metrics.get("performance"),
             },
         }
@@ -642,6 +660,10 @@ def run_adaptive_fight(
             "session_id": (
                 transition_recorder.session_id if transition_recorder else None
             ),
+            "offline_artifact": {
+                "loaded": bool(prior_offline_policy),
+                "error": offline_artifact_error,
+            },
         },
     )
 
@@ -781,6 +803,9 @@ def run_adaptive_fight(
                     prior_human_demonstrations=prior_human_demonstrations,
                     prior_attack_geometry=prior_attack_geometry,
                     prior_cancel_graph=prior_cancel_graph,
+                    prior_offline_policy=prior_offline_policy,
+                    difficulty=difficulty,
+                    opponent_key=opponent_key,
                 )
             )
             decision_frames += 1

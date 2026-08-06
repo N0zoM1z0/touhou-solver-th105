@@ -89,6 +89,12 @@ def main() -> int:
         ) from exc
 
     records = _load_records(args.input)
+    corpus_manifest: dict[str, object] = {}
+    if args.corpus_manifest and args.corpus_manifest.is_file():
+        loaded_manifest = json.loads(args.corpus_manifest.read_text(encoding="utf-8"))
+        if not isinstance(loaded_manifest, dict):
+            raise ValueError("corpus manifest must be a JSON object")
+        corpus_manifest = loaded_manifest
     rows = [feature_vector(record) for record in records]
     targets = [outcome_targets(record) for record in records]
     train_indices, validation_indices = temporal_episode_split(
@@ -103,10 +109,16 @@ def main() -> int:
 
     head_specs: tuple[tuple[str, str, Callable[[dict[str, float]], float]], ...] = (
         ("damage_bp", "RMSE", lambda target: target["damage_bp"]),
+        (
+            "connection_probability",
+            "RMSE",
+            lambda target: target["connection_probability"],
+        ),
         ("self_damage_bp", "RMSE", lambda target: target["self_damage_bp"]),
         ("self_damage_p90_bp", "Quantile:alpha=0.9", lambda target: target["self_damage_bp"]),
         ("spirit_cost_bp", "RMSE", lambda target: target["spirit_cost_bp"]),
         ("punished_probability", "RMSE", lambda target: target["punished_probability"]),
+        ("commitment_frames", "RMSE", lambda target: target["commitment_frames"]),
         ("terminal_value", "RMSE", lambda target: target["terminal_value"]),
     )
     predictions: dict[str, list[float]] = {}
@@ -189,6 +201,19 @@ def main() -> int:
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "context_schema_version": 1,
         "outcome_heads": sorted(predictions),
+        "compatibility": {
+            "game_build_sha256": corpus_manifest.get("game_build_sha256", []),
+            "difficulties": (
+                corpus_manifest.get("statistics", {}).get("difficulties", [])
+                if isinstance(corpus_manifest.get("statistics"), dict)
+                else []
+            ),
+            "opponents": (
+                corpus_manifest.get("statistics", {}).get("opponents", [])
+                if isinstance(corpus_manifest.get("statistics"), dict)
+                else []
+            ),
+        },
         "contexts": {context: actions for context, actions in sorted(aggregates.items())},
     }
     distilled_path = args.output / "distilled_policy.json"

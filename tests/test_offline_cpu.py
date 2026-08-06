@@ -21,6 +21,7 @@ def _record(episode: str, *, action: str = "236B") -> dict[str, object]:
         "difficulty": "lunatic",
         "opponent": "reimu@lunatic",
         "action": action,
+        "duration_frames": 31,
         "state": {
             "relative_x_q4": 18,
             "relative_y_q4": 0,
@@ -71,8 +72,10 @@ class OfflineCpuTests(unittest.TestCase):
     def test_outcomes_remain_separate_heads(self) -> None:
         targets = outcome_targets(_record("a"))
         self.assertEqual(targets["damage_bp"], 900.0)
+        self.assertEqual(targets["connection_probability"], 1.0)
         self.assertEqual(targets["self_damage_bp"], 100.0)
         self.assertEqual(targets["punished_probability"], 1.0)
+        self.assertEqual(targets["commitment_frames"], 31.0)
         self.assertEqual(targets["terminal_value"], 1.0)
 
     def test_distillation_context_is_bounded_and_difficulty_specific(self) -> None:

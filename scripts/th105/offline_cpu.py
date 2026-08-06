@@ -121,9 +121,11 @@ def outcome_targets(record: dict[str, object]) -> dict[str, float]:
     terminal_value = 1.0 if terminal == "win" else -1.0 if terminal == "loss" else 0.0
     return {
         "damage_bp": _number(outcome, "damage_bp"),
+        "connection_probability": 1.0 if _number(outcome, "damage_bp") > 0 else 0.0,
         "self_damage_bp": _number(outcome, "self_damage_bp"),
         "spirit_cost_bp": _number(outcome, "spirit_cost_bp"),
         "punished_probability": 1.0 if bool(outcome.get("punished")) else 0.0,
+        "commitment_frames": max(1.0, _number(record, "duration_frames")),
         "terminal_value": terminal_value,
     }
 

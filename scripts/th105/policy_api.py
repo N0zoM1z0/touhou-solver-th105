@@ -25,6 +25,9 @@ class PolicyObservation:
     prior_human_demonstrations: dict[str, object] = field(default_factory=dict)
     prior_attack_geometry: dict[str, object] = field(default_factory=dict)
     prior_cancel_graph: dict[str, object] = field(default_factory=dict)
+    prior_offline_policy: dict[str, object] = field(default_factory=dict)
+    difficulty: str = "unknown"
+    opponent_key: str = "unknown"
 
 
 @dataclass(frozen=True)
