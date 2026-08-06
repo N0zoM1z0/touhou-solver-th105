@@ -20,6 +20,7 @@ from th105.battle import (
     cold_start_offense_prior,
     local_box_to_world,
     read_frame_box_vector,
+    round_end_confirm_keys,
 )
 
 
@@ -115,6 +116,12 @@ class BootstrapBattleTests(unittest.TestCase):
         self.assertEqual(seeded["*"]["236B"]["trials"], 4)
         self.assertEqual(seeded["__reward__"]["rounds"]["rounds"], 0)
         self.assertEqual(original["__reward__"]["rounds"]["rounds"], 3)
+
+    def test_round_end_confirm_uses_sparse_z_for_arena_dialogue(self) -> None:
+        self.assertEqual(round_end_confirm_keys(0), {"z"})
+        self.assertEqual(round_end_confirm_keys(1), set())
+        self.assertEqual(round_end_confirm_keys(29), set())
+        self.assertEqual(round_end_confirm_keys(30), {"z"})
 
 
 if __name__ == "__main__":

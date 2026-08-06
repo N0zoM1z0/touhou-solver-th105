@@ -152,6 +152,17 @@ def cold_start_offense_prior(state: object) -> dict[str, object]:
     return cloned
 
 
+def round_end_confirm_keys(round_end_frames: int) -> set[str]:
+    """Advance both round results and post-match dialogue with sparse Z edges.
+
+    Scene 5 remains active for Arena dialogue after the deciding round.  X
+    cannot dismiss that dialogue, so difficulty rotation must wait until Z has
+    advanced the game to character select; the outer campaign controller then
+    backs out with X and changes the CPU difficulty there.
+    """
+    return {"z"} if round_end_frames % 30 == 0 else set()
+
+
 @dataclass(frozen=True)
 class ProjectileState:
     pointer: int
@@ -696,11 +707,11 @@ def run_adaptive_fight(
                         },
                     )
                 terminal_reported = True
-            # Dynamic difficulty quotas leave the result screen with X; normal
-            # play uses Z to continue. Keep rising edges sparse so one input
-            # cannot leak through several screens.
-            result_key = "x" if rotation_requested else "z"
-            keys = {result_key} if round_end_frames % 30 == 0 else set()
+            # Both the between-round result and Arena's post-match dialogue
+            # live in scene 5 and require Z.  Difficulty rotation happens only
+            # after this reaches character select, where the outer controller
+            # can safely use X without deadlocking the dialogue.
+            keys = round_end_confirm_keys(round_end_frames)
             keyboard.set_chord(keys)
             last_intent = (
                 "round-end-difficulty-rotate"
