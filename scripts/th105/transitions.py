@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .reward import basis_points
+from .schema import (
+    ACTION_SCHEMA_VERSION,
+    FEATURE_SCHEMA_VERSION,
+    TRAINING_GENERATION,
+    TRANSITION_SCHEMA_VERSION,
+)
 
-
-TRANSITION_SCHEMA_VERSION = 2
-FEATURE_SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 2
 
 
 class TransitionWriter(Protocol):
@@ -141,6 +143,7 @@ class OptionTransitionRecorder:
         difficulty: str,
         game_build_sha256: str | None = None,
         offline_policy_sha256: str | None = None,
+        training_generation: str = TRAINING_GENERATION,
     ) -> None:
         self.writer = writer
         self.session_id = session_id
@@ -148,6 +151,7 @@ class OptionTransitionRecorder:
         self.difficulty = difficulty
         self.game_build_sha256 = game_build_sha256
         self.offline_policy_sha256 = offline_policy_sha256
+        self.training_generation = training_generation
         self.episode_id: str | None = None
         self.step = 0
         self.active: _ActiveOption | None = None
@@ -308,6 +312,7 @@ class OptionTransitionRecorder:
                 "schema_version": TRANSITION_SCHEMA_VERSION,
                 "feature_schema_version": FEATURE_SCHEMA_VERSION,
                 "action_schema_version": ACTION_SCHEMA_VERSION,
+                "training_generation": self.training_generation,
                 "session_id": self.session_id,
                 "episode_id": option.episode_id,
                 "transition_id": f"{option.episode_id}:{option.step:06d}",

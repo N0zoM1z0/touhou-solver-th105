@@ -25,6 +25,7 @@ from th105.offline_cpu import (
     feature_vector,
     outcome_targets,
     temporal_episode_split,
+    validate_transition_schemas,
 )
 from th105.reward import DEFAULT_REWARD, REWARD_VERSION
 from dataclasses import asdict
@@ -90,6 +91,7 @@ def main() -> int:
         ) from exc
 
     records = _load_records(args.input)
+    validate_transition_schemas(records)
     corpus_manifest: dict[str, object] = {}
     if args.corpus_manifest and args.corpus_manifest.is_file():
         loaded_manifest = json.loads(args.corpus_manifest.read_text(encoding="utf-8"))

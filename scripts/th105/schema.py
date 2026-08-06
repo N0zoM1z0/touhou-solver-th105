@@ -1,0 +1,9 @@
+"""Independent durable schema axes for autonomous TH105 learning."""
+
+TRANSITION_SCHEMA_VERSION = 2
+FEATURE_SCHEMA_VERSION = 1
+ACTION_SCHEMA_VERSION = 3
+CORPUS_SCHEMA_VERSION = 2
+LEARNING_CURVE_SCHEMA_VERSION = 1
+TRAINING_GENERATION = "autonomous-routes-v3"
+

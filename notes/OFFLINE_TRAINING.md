@@ -15,7 +15,8 @@ defense, movement, or bounded neutral option) in `th105_transitions.jsonl`:
 {
   "schema_version": 2,
   "feature_schema_version": 1,
-  "action_schema_version": 2,
+  "action_schema_version": 3,
+  "training_generation": "autonomous-routes-v3",
   "game_build_sha256": "...",
   "episode_id": "...",
   "step": 17,
@@ -57,11 +58,12 @@ is essential: an offline trainer must not interpret a native-illegal option as
 an action the behavior policy deliberately rejected. The behavior probability
 is also required for importance-weighted evaluation; deterministic choices use
 `1.0`, while exploration records its real sampling probability. Action schema
-v2 exposes an exact set for every adaptive-policy option. A hard priority or
+v3 exposes an exact set for every adaptive-policy option and replaces encoded
+combo routes with generated chord/motion hypotheses. A hard priority or
 commitment gate with no remaining alternative emits the honest singleton
 `[action]`; multi-action sets cover defense, native-safe projectile movement,
-neutral/advantage movement, space-control skills, and context-valid combo
-routes. The recorder starts a new option whenever this set changes, even if the
+neutral/advantage movement, space-control skills, and context-valid autonomous
+route candidates. The recorder starts a new option whenever this set changes, even if the
 intent string does not. Legacy rows may still contain `legal_actions: null` and
 must remain excluded from methods that require known support.
 

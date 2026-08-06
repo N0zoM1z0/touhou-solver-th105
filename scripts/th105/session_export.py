@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from .reward import DEFAULT_REWARD, REWARD_VERSION
+from .schema import ACTION_SCHEMA_VERSION, TRAINING_GENERATION
 
 
 EXPORT_SCHEMA_VERSION = 1
@@ -207,6 +208,7 @@ match boundary, so the actual count may be slightly higher.
 - `data/transitions.jsonl.gz`: schema-versioned state/action/outcome/next-state
   records at policy-option boundaries.
 - `data/terminals.jsonl.gz`: sanitized encounter and terminal summaries.
+- `data/learning_curve.jsonl.gz`: one compact physical checkpoint per round.
 - `models/baseline/`: online learner state before collection.
 - `models/final/`: online learner state after collection.
 - `manifest.json`: hashes, versions, reward scalarization, coverage, and counts.
@@ -218,8 +220,8 @@ license an offline model to bypass them.
 
 ## Limitations
 
-- Behavior is adaptive and the current legal-action set is not known for every
-  transition. `legal_actions_known` and `behavior_probability` must be honored.
+- Behavior is adaptive. Action schema 3 records the complete current legal set;
+  `legal_actions_known` and `behavior_probability` must still be honored.
 - This is observational gameplay data, not randomized causal evidence.
 - Offline metrics are diagnostic; complete physical matches remain the final
   policy evaluation.
@@ -266,6 +268,16 @@ def export_session(
         transitions.append(record)
     if not transitions:
         raise ValueError(f"no transitions found for session {session_id}")
+    action_schemas = {
+        int(record.get("action_schema_version", 0)) for record in transitions
+    }
+    generations = {
+        str(record.get("training_generation", "")) for record in transitions
+    }
+    if action_schemas != {ACTION_SCHEMA_VERSION}:
+        raise ValueError(f"session has incompatible action schemas: {action_schemas}")
+    if generations != {TRAINING_GENERATION}:
+        raise ValueError(f"session has incompatible generations: {generations}")
 
     difficulties = {str(record.get("difficulty", "")) for record in transitions}
     transition_opponents = {str(record.get("opponent", "")) for record in transitions}
@@ -278,10 +290,17 @@ def export_session(
         opponents=transition_opponents,
     )
     terminals = [event for event in events if event["event"] == "round-terminal"]
+    curve_points = [
+        record
+        for record in iter_jsonl_family(runtime_dir / "th105_learning_curve.jsonl")
+        if record.get("session_id") == session_id
+        and started_at <= float(record.get("time", 0.0)) <= ended_at
+    ]
 
     data_dir = output_dir / "data"
     _write_jsonl_gz(data_dir / "transitions.jsonl.gz", transitions)
     _write_jsonl_gz(data_dir / "terminals.jsonl.gz", events)
+    _write_jsonl_gz(data_dir / "learning_curve.jsonl.gz", curve_points)
     if baseline_dir is not None:
         _copy_models(baseline_dir, output_dir / "models" / "baseline")
     _copy_models(
@@ -362,6 +381,7 @@ def export_session(
             "transitions": len(transitions),
             "episodes": len(episodes),
             "terminal_rounds": len(terminals),
+            "learning_curve_points": len(curve_points),
             "wins": wins,
             "losses": losses,
             "draws": draws,

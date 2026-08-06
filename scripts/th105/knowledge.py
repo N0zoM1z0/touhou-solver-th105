@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-CORPUS_SCHEMA_VERSION = 1
+from .schema import ACTION_SCHEMA_VERSION, CORPUS_SCHEMA_VERSION, TRAINING_GENERATION
 MODEL_FIELDS = (
     "profiles",
     "projectile_envelopes",
@@ -22,12 +22,16 @@ def load_knowledge(path: Path) -> dict[str, object]:
         return {
             "version": 1,
             "schema_version": CORPUS_SCHEMA_VERSION,
+            "action_schema_version": ACTION_SCHEMA_VERSION,
+            "training_generation": TRAINING_GENERATION,
             "characters": {},
         }
     data = json.loads(path.read_text(encoding="utf-8"))
     if (
         data.get("version") != 1
         or int(data.get("schema_version", 1)) != CORPUS_SCHEMA_VERSION
+        or int(data.get("action_schema_version", 0)) != ACTION_SCHEMA_VERSION
+        or str(data.get("training_generation", "")) != TRAINING_GENERATION
         or not isinstance(data.get("characters"), dict)
     ):
         raise ValueError(f"unsupported opponent knowledge format: {path}")
@@ -111,6 +115,8 @@ def persist_character_models(
 ) -> None:
     data = load_knowledge(path)
     data["schema_version"] = CORPUS_SCHEMA_VERSION
+    data["action_schema_version"] = ACTION_SCHEMA_VERSION
+    data["training_generation"] = TRAINING_GENERATION
     characters = data["characters"]
     previous = characters.get(character_key, {})
     entry = dict(previous) if isinstance(previous, dict) else {}

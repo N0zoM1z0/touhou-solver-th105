@@ -13,11 +13,17 @@ from th105.offline_cpu import (
     feature_vector,
     outcome_targets,
     temporal_episode_split,
+    validate_transition_schemas,
 )
+from th105.schema import TRAINING_GENERATION
 
 
 def _record(episode: str, *, action: str = "236B") -> dict[str, object]:
     return {
+        "schema_version": 2,
+        "feature_schema_version": 1,
+        "action_schema_version": 3,
+        "training_generation": TRAINING_GENERATION,
         "episode_id": episode,
         "difficulty": "lunatic",
         "opponent": "reimu@lunatic",
@@ -100,6 +106,13 @@ class OfflineCpuTests(unittest.TestCase):
         train, validation = temporal_episode_split(records, validation_fraction=0.5)
         self.assertEqual(train, [0, 1])
         self.assertEqual(validation, [2, 3])
+
+    def test_schema_validation_rejects_legacy_action_space(self) -> None:
+        valid = _record("a")
+        validate_transition_schemas([valid])
+        legacy = dict(valid, action_schema_version=2)
+        with self.assertRaisesRegex(ValueError, "action_schema_version"):
+            validate_transition_schemas([valid, legacy])
 
 
 if __name__ == "__main__":

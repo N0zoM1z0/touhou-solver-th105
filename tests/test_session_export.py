@@ -10,15 +10,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.session_export import export_session
+from th105.schema import TRAINING_GENERATION
 
 from run_th105_policy_ab import controller_result
 
 
 def _transition(session: str, transition_id: str, step: int) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "feature_schema_version": 1,
-        "action_schema_version": 1,
+        "action_schema_version": 3,
+        "training_generation": TRAINING_GENERATION,
         "session_id": session,
         "episode_id": "episode-a",
         "transition_id": transition_id,
@@ -94,6 +96,19 @@ class SessionExportTests(unittest.TestCase):
             (runtime / "th105_live.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in live), encoding="utf-8"
             )
+            (runtime / "th105_learning_curve.jsonl").write_text(
+                json.dumps(
+                    {
+                        "time": 11.0,
+                        "session_id": session,
+                        "training_generation": TRAINING_GENERATION,
+                        "action_schema_version": 3,
+                        "outcome": {"won": True},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             for name in (
                 "th105_opponent_models.json",
                 "th105_compiled_policy.json",
@@ -112,6 +127,7 @@ class SessionExportTests(unittest.TestCase):
             )
             self.assertEqual(manifest["statistics"]["transitions"], 2)
             self.assertEqual(manifest["statistics"]["terminal_rounds"], 1)
+            self.assertEqual(manifest["statistics"]["learning_curve_points"], 1)
             self.assertEqual(manifest["offline_policy_sha256"], ["d" * 64])
             with gzip.open(
                 output / "data" / "transitions.jsonl.gz", "rt", encoding="utf-8"

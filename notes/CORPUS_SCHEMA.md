@@ -6,6 +6,9 @@ or reward formula. A learner may change without invalidating observations.
 ## Version axes
 
 - `schema_version` describes field names, units, and encoding.
+- `action_schema_version` describes the legal option vocabulary. Version 3 is
+  the generated `autonomous-routes-v3` grammar and is incompatible with legacy
+  fixed-route labels.
 - `reward_version` describes only how outcome fields are scalarized.
 - compiled policy artifacts are disposable caches and may be regenerated.
 
@@ -33,7 +36,7 @@ new observation.
    state, exact native-gated legal action set, chosen
    action and behavior probability, duration, raw outcome components, next
    state, opponent/difficulty, and independent schema versions. Action schema
-   v2 uses an exact singleton after a hard priority/commitment gate and a full
+   v3 uses an exact singleton after a hard priority/commitment gate and a full
    set wherever several candidates survive; legacy unknown sets remain `null`.
    A legal-set change is itself an option boundary. The live JSONL plus eight gzip
    rotations are capped; an offline compactor can later produce immutable
@@ -54,6 +57,8 @@ cannot recover.
   cannot diverge after the first v1 sample.
 - New writers retain raw outcome components; they never store only Q, reward,
   logits, or an action rank.
+- Offline trainers require exactly one current action schema and one training
+  generation. They reject mixed legacy/current records before fitting.
 - Unknown additive fields are ignored by old readers.
 - Model compilers calculate utility from the current reward module and stamp
   its `reward_version`; changing reward weights requires recompilation, not

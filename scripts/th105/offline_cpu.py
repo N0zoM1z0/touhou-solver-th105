@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from .schema import (
+    ACTION_SCHEMA_VERSION,
+    FEATURE_SCHEMA_VERSION,
+    TRAINING_GENERATION,
+    TRANSITION_SCHEMA_VERSION,
+)
+
 
 CPU_FEATURE_SCHEMA_VERSION = 1
 CATEGORICAL_FEATURES = (
@@ -47,6 +54,25 @@ NUMERIC_FEATURES = (
     "own_projectile_count",
 )
 FEATURE_NAMES = (*CATEGORICAL_FEATURES, *NUMERIC_FEATURES)
+
+
+def validate_transition_schemas(records: list[dict[str, object]]) -> None:
+    """Reject mixed/legacy action spaces before any offline fitting."""
+    expected = {
+        "schema_version": TRANSITION_SCHEMA_VERSION,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "action_schema_version": ACTION_SCHEMA_VERSION,
+    }
+    for name, version in expected.items():
+        observed = {int(record.get(name, 0)) for record in records}
+        if observed != {version}:
+            raise ValueError(f"incompatible {name}: {sorted(observed)} != [{version}]")
+    generations = {str(record.get("training_generation", "")) for record in records}
+    if generations != {TRAINING_GENERATION}:
+        raise ValueError(
+            "incompatible training generations: "
+            f"{sorted(generations)} != [{TRAINING_GENERATION!r}]"
+        )
 
 
 def _mapping(value: object) -> dict[str, object]:

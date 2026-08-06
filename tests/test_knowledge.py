@@ -64,7 +64,10 @@ class OpponentKnowledgeTests(unittest.TestCase):
                 }
             }
             persist_profiles(path, "0x12345678", profiles)
-            self.assertEqual(json.loads(path.read_text())["schema_version"], 1)
+            root = json.loads(path.read_text())
+            self.assertEqual(root["schema_version"], 2)
+            self.assertEqual(root["action_schema_version"], 3)
+            self.assertEqual(root["training_generation"], "autonomous-routes-v3")
             loaded = profiles_for(path, "0x12345678")
             model = OpponentActionModel()
             model.seed(loaded)

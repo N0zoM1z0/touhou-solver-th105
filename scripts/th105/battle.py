@@ -27,6 +27,7 @@ from .knowledge import (
     load_knowledge,
     persist_character_models,
 )
+from .learning_curve import learning_curve_point, load_generation_manifest
 from .policy_api import PolicyObservation
 from .policy_loader import HotReloadPolicy
 from .telemetry import BoundedJsonlWriter
@@ -574,6 +575,22 @@ def run_adaptive_fight(
     telemetry = (
         BoundedJsonlWriter(telemetry_path) if telemetry_path is not None else None
     )
+    generation_manifest = (
+        load_generation_manifest(telemetry_path.parent)
+        if telemetry_path is not None
+        else load_generation_manifest(Path("runtime"))
+    )
+    training_generation = str(generation_manifest["training_generation"])
+    learning_curve = (
+        BoundedJsonlWriter(
+            telemetry_path.with_name("th105_learning_curve.jsonl"),
+            rotate_bytes=4 * 1024 * 1024,
+            backups=8,
+            archive_dir=telemetry_path.parent / "corpus_archive",
+        )
+        if telemetry_path is not None
+        else None
+    )
     record_this_opponent = (
         transition_opponent_filter is None
         or base_opponent_key.casefold() == transition_opponent_filter.casefold()
@@ -591,6 +608,7 @@ def run_adaptive_fight(
             difficulty=difficulty,
             game_build_sha256=game_build_sha256,
             offline_policy_sha256=offline_artifact_sha256,
+            training_generation=training_generation,
         )
         if telemetry_path is not None and record_this_opponent
         else None
@@ -741,6 +759,29 @@ def run_adaptive_fight(
                             "spirit": me.spirit,
                         }
                     )
+                    if learning_curve is not None:
+                        status = plugin.status()
+                        learning_curve.write(
+                            learning_curve_point(
+                                session_id=session_id or "unknown",
+                                terminal_sequence=terminal_sequence,
+                                opponent=opponent_key,
+                                difficulty=difficulty,
+                                playstyle=playstyle,
+                                won=won,
+                                me_hp=me.hp,
+                                enemy_hp=enemy.hp,
+                                max_me_hp=me.max_hp,
+                                max_enemy_hp=enemy.max_hp,
+                                policy_sha256=(
+                                    str(status.get("sha256"))
+                                    if status.get("sha256")
+                                    else None
+                                ),
+                                offline_policy_sha256=offline_artifact_sha256,
+                                plugin_metrics=status.get("metrics"),
+                            )
+                        )
                     if won is True:
                         round_wins += 1
                     elif won is False:
