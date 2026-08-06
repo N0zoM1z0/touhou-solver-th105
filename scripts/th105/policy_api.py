@@ -31,6 +31,9 @@ class PolicyObservation:
     # Exploration is applied only after native legality/safety gates.  A/B
     # evaluation sets this to zero; corpus collection can deliberately widen it.
     exploration_rate: float = 0.08
+    # Style changes scalarization/action priors only. Native legality and
+    # hazard gates remain authoritative for every profile.
+    playstyle: str = "balanced"
 
 
 @dataclass(frozen=True)

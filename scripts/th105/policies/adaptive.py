@@ -14,13 +14,13 @@ from ..cancel_learning import CancelGraphModel
 from ..defense_learning import DefenseResponseModel
 from ..hazard import HazardEvaluator, HazardProjectile, MovementCandidate
 from ..human_learning import human_demonstration_utility as _human_demonstration_utility
-from ..motion import build_motion_frames
+from ..motion import build_motion_frames, generated_motion_hypotheses
 from ..offense_learning import ActionOutcomeModel, combat_context
 from ..offline_artifact import DistilledOutcomePolicy, live_distillation_context
 from ..opponent_model import ActionAssessment, OpponentActionModel
 from ..policy_api import POLICY_API_VERSION, PolicyDecision, PolicyObservation
 from ..projectile_model import ProjectileEnvelopeModel
-from ..reward import empirical_action_value
+from ..reward import RewardConfig, empirical_action_value, reward_for_playstyle
 from ..sakuya_combos import COMBOS, ComboContext, rank_combos
 from ..tactics import ActionCandidate, TacticalContext, rank_actions
 
@@ -32,6 +32,61 @@ SKILL_ACTIONS = {
     "214C": 521,
     "623B": 540,
     "623C": 541,
+}
+
+
+PLAYSTYLE_TUNING: dict[str, dict[str, float]] = {
+    "defensive": {
+        "exploration_scale": 420.0,
+        "attack_cooldown_scale": 1.15,
+        "skill_cooldown": 120.0,
+        "far_watch": 40.0,
+        "far_approach": 5.0,
+        "neutral_approach": -35.0,
+        "close_pressure": -30.0,
+        "close_guard": 45.0,
+        "skill_hp_floor": 0.60,
+        "skill_spirit_floor": 550.0,
+        "skill_distance_floor": 440.0,
+        "motion_probe_cooldown": 480.0,
+        "far_zone": 340.0,
+        "skill_bias": -80.0,
+        "probe_self_ratio": 0.15,
+    },
+    "balanced": {
+        "exploration_scale": 450.0,
+        "attack_cooldown_scale": 1.00,
+        "skill_cooldown": 95.0,
+        "far_watch": 25.0,
+        "far_approach": 35.0,
+        "neutral_approach": 20.0,
+        "close_pressure": 30.0,
+        "close_guard": 25.0,
+        "skill_hp_floor": 0.50,
+        "skill_spirit_floor": 475.0,
+        "skill_distance_floor": 390.0,
+        "motion_probe_cooldown": 300.0,
+        "far_zone": 310.0,
+        "skill_bias": 40.0,
+        "probe_self_ratio": 0.28,
+    },
+    "aggressive": {
+        "exploration_scale": 520.0,
+        "attack_cooldown_scale": 0.62,
+        "skill_cooldown": 62.0,
+        "far_watch": 0.0,
+        "far_approach": 90.0,
+        "neutral_approach": 85.0,
+        "close_pressure": 100.0,
+        "close_guard": 0.0,
+        "skill_hp_floor": 0.35,
+        "skill_spirit_floor": 400.0,
+        "skill_distance_floor": 340.0,
+        "motion_probe_cooldown": 150.0,
+        "far_zone": 260.0,
+        "skill_bias": 180.0,
+        "probe_self_ratio": 0.50,
+    },
 }
 
 
@@ -340,6 +395,8 @@ def _bounded_bandit_score(
     context: str,
     *,
     prior_score: float = 0.0,
+    reward_config: RewardConfig | None = None,
+    exploration_scale: float = 450.0,
 ) -> float:
     """Cheap optimistic score over bounded sufficient statistics.
 
@@ -355,9 +412,13 @@ def _bounded_bandit_score(
     bounded_prior = max(-200.0, min(250.0, prior_score * 0.15))
     if trials <= 0:
         return 2000.0 + bounded_prior
-    utility = empirical_action_value(stats)
+    utility = empirical_action_value(
+        stats, reward_config or reward_for_playstyle("defensive")
+    )
     total_trials = sum(int(getattr(value, "trials", 0)) for value in row.values())
-    exploration = 450.0 * math.sqrt(math.log(max(2, total_trials + 2)) / trials)
+    exploration = exploration_scale * math.sqrt(
+        math.log(max(2, total_trials + 2)) / trials
+    )
     return utility + exploration + bounded_prior
 
 
@@ -378,6 +439,9 @@ class SakuyaAdaptivePolicy:
     name = "sakuya-adaptive-v1"
 
     def __init__(self) -> None:
+        self.playstyle = "balanced"
+        self.tuning = PLAYSTYLE_TUNING[self.playstyle]
+        self.reward_config = reward_for_playstyle(self.playstyle)
         self.queue: deque[set[str]] = deque()
         self.queue_intent: str | None = None
         self.queue_legal_actions: tuple[str, ...] | None = None
@@ -417,6 +481,7 @@ class SakuyaAdaptivePolicy:
         self._decision_legal_actions: tuple[str, ...] | None = None
         self._decision_probability = 1.0
         self.cancel_cooldown = 0
+        self.motion_probe_cooldown = 0
         self.last_assessment = ActionAssessment(0, 0, "neutral", 0.0, 0.0, 0.0, False)
         self.last_tactical_scores: list[dict[str, float | str]] = []
         self.last_risk: dict[str, float | bool | int] = {}
@@ -442,6 +507,34 @@ class SakuyaAdaptivePolicy:
         self.hazard_total_ns = 0
         self.hazard_max_ns = 0
 
+    def _set_playstyle(self, playstyle: str) -> None:
+        selected = playstyle if playstyle in PLAYSTYLE_TUNING else "balanced"
+        if selected != self.playstyle:
+            self.counts[f"playstyle_switch:{self.playstyle}->{selected}"] += 1
+        self.playstyle = selected
+        self.tuning = PLAYSTYLE_TUNING[selected]
+        self.reward_config = reward_for_playstyle(selected)
+
+    def _bandit_score(
+        self,
+        model: object,
+        label: str,
+        context: str,
+        *,
+        prior_score: float = 0.0,
+    ) -> float:
+        return _bounded_bandit_score(
+            model,
+            label,
+            context,
+            prior_score=prior_score,
+            reward_config=self.reward_config,
+            exploration_scale=self.tuning["exploration_scale"],
+        )
+
+    def _attack_cooldown(self, frames: int) -> int:
+        return max(1, round(frames * self.tuning["attack_cooldown_scale"]))
+
     def export_state(self) -> dict[str, object]:
         # Preserve learned counters/cooldowns, but never transplant a half-issued
         # input sequence across code generations.
@@ -460,6 +553,7 @@ class SakuyaAdaptivePolicy:
             "attack_geometry": self.enemy_attack_geometry.export_state(),
             "cancel_graph": self.cancel_graph.export_state(),
             "cancel_cooldown": self.cancel_cooldown,
+            "motion_probe_cooldown": self.motion_probe_cooldown,
             "coverage_explorer": self.coverage_explorer.export_state(),
         }
 
@@ -483,6 +577,7 @@ class SakuyaAdaptivePolicy:
         self.enemy_attack_geometry.import_state(state.get("attack_geometry", {}))
         self.cancel_graph.import_state(state.get("cancel_graph", {}))
         self.cancel_cooldown = int(state.get("cancel_cooldown", 0))
+        self.motion_probe_cooldown = int(state.get("motion_probe_cooldown", 0))
         self.coverage_explorer.import_state(state.get("coverage_explorer", {}))
         # A hot-reload state is newer than the encounter-start disk prior.
         # Prevent the first decide() of the new generation from overwriting it.
@@ -647,7 +742,10 @@ class SakuyaAdaptivePolicy:
         )
         adjustments = {
             candidate.name: self.offense_outcomes.adjustment(
-                candidate.name, outcome_context, explore=punish
+                candidate.name,
+                outcome_context,
+                explore=punish,
+                reward_config=self.reward_config,
             )
             for candidate in COMBOS
         }
@@ -680,7 +778,7 @@ class SakuyaAdaptivePolicy:
         )
         self.combo_target_hp = enemy.hp
         self.combo_confirm_deadline = observation.frame + 18
-        self.attack_cooldown = 75
+        self.attack_cooldown = self._attack_cooldown(75)
         self.counts[f"{prefix}_attempts:{combo.name}"] += 1
         return self.queue.popleft(), f"{prefix}:{combo.name}"
 
@@ -798,7 +896,7 @@ class SakuyaAdaptivePolicy:
         )
         self.combo_target_hp = enemy.hp
         self.combo_confirm_deadline = observation.frame + min(24, len(frames))
-        self.attack_cooldown = min(120, len(frames) + 24)
+        self.attack_cooldown = self._attack_cooldown(min(120, len(frames) + 24))
         self.counts[f"human_demo_attempts:{signature}:{pattern_id}"] += 1
         self.last_human_demonstration = {
             "frame": observation.frame,
@@ -843,7 +941,8 @@ class SakuyaAdaptivePolicy:
                 not _pattern_has_advancing_attack(pattern)
                 or connections / trials < 0.6
                 or average_damage <= 0.0
-                or average_self > max(50.0, average_damage * 0.15)
+                or average_self
+                > max(50.0, average_damage * self.tuning["probe_self_ratio"])
                 or average_spirit > max(0, spirit - 200)
             ):
                 continue
@@ -855,7 +954,7 @@ class SakuyaAdaptivePolicy:
             label = f"human-probe:{signature}:{pattern_id}"
             if _probe_is_empirically_unsafe(self.offense_outcomes, label, context):
                 continue
-            score = _bounded_bandit_score(
+            score = self._bandit_score(
                 self.offense_outcomes,
                 label,
                 context,
@@ -878,7 +977,7 @@ class SakuyaAdaptivePolicy:
                 continue
             viable.append(
                 (
-                    _bounded_bandit_score(self.offense_outcomes, label, context),
+                    self._bandit_score(self.offense_outcomes, label, context),
                     name,
                     name,
                     pattern,
@@ -906,7 +1005,7 @@ class SakuyaAdaptivePolicy:
         )
         self.combo_target_hp = enemy.hp
         self.combo_confirm_deadline = observation.frame + min(16, len(frames) + 4)
-        self.attack_cooldown = 90
+        self.attack_cooldown = self._attack_cooldown(90)
         counter_family = (
             "human_probe_attempts" if source == "human-seed" else "self_probe_attempts"
         )
@@ -923,6 +1022,76 @@ class SakuyaAdaptivePolicy:
             "source": source,
         }
         return self.queue.popleft(), f"{source}-probe:{signature}"
+
+    def _start_motion_hypothesis(
+        self,
+        observation: PolicyObservation,
+        toward: str,
+    ) -> tuple[set[str], str] | None:
+        """Probe one generated command; native outcomes decide whether it exists."""
+        me, enemy = observation.state.p1, observation.state.p2
+        context = combat_context(
+            distance=abs(enemy.x - me.x),
+            enemy_y=enemy.y,
+            enemy_x=enemy.x,
+            phase=self.last_assessment.phase,
+        )
+        hypotheses = {
+            label: (motion, button)
+            for label, motion, button in generated_motion_hypotheses()
+            if me.vtable != 0x006B0924 or label not in SKILL_INPUT
+        }
+        character_key = f"0x{me.vtable:08X}"
+
+        def outcome_label(label: str) -> str:
+            return f"motion:{character_key}:{label}"
+
+        scores = {
+            f"motion-probe:{label}": self._bandit_score(
+                self.offense_outcomes,
+                outcome_label(label),
+                context,
+            )
+            for label in hypotheses
+            if not _probe_is_empirically_unsafe(
+                self.offense_outcomes, outcome_label(label), context
+            )
+        }
+        if not scores:
+            return None
+        selected = self._choose_legal_action(
+            observation,
+            "motion-discovery",
+            scores,
+        )
+        label = selected.split(":", 1)[1]
+        motion, button = hypotheses[label]
+        frames = build_motion_frames(
+            motion,
+            button,
+            toward,
+            recovery_frames=8,
+        )
+        self.queue.extend(frames)
+        self.queue_intent = selected
+        self.queue_legal_actions = self._decision_legal_actions or (selected,)
+        self.queue_behavior_probability = self._decision_probability
+        self.offense_outcomes.begin(
+            outcome_label(label),
+            context,
+            frame=observation.frame,
+            commitment=len(frames) + 18,
+            enemy_hp=enemy.hp,
+            me_hp=me.hp,
+            spirit=int(getattr(me, "spirit", 1000)),
+            me_x=me.x,
+            me_action_id=me.action_id,
+            projectile_count=len(tuple(getattr(observation, "own_projectiles", ()))),
+        )
+        self.motion_probe_cooldown = round(self.tuning["motion_probe_cooldown"])
+        self.attack_cooldown = self._attack_cooldown(len(frames) + 12)
+        self.counts[f"motion_probe_attempts:{label}"] += 1
+        return self.queue.popleft(), selected
 
     def _start_learned_cancel(
         self,
@@ -955,7 +1124,7 @@ class SakuyaAdaptivePolicy:
             if _probe_is_empirically_unsafe(self.offense_outcomes, label, context):
                 continue
             direct_prior = edge.total_direct_damage / max(1, edge.trials)
-            score = _bounded_bandit_score(
+            score = self._bandit_score(
                 self.offense_outcomes,
                 label,
                 context,
@@ -1090,6 +1259,7 @@ class SakuyaAdaptivePolicy:
         # already committed falls back to an exact singleton legal set.
         self._decision_legal_actions = None
         self._decision_probability = 1.0
+        self._set_playstyle(str(getattr(observation, "playstyle", "balanced")))
         state = observation.state
         me, enemy = state.p1, state.p2
         # Guard/motion direction must follow the fighter's native facing. An
@@ -1204,6 +1374,9 @@ class SakuyaAdaptivePolicy:
             enemy_hp=enemy.hp,
             me_hp=me.hp,
             spirit=spirit,
+            me_x=me.x,
+            me_action_id=me.action_id,
+            projectile_count=len(own_projectiles),
         )
         enemy_attacking = bool(
             getattr(enemy, "attack_boxes", ())
@@ -1914,7 +2087,7 @@ class SakuyaAdaptivePolicy:
             # Probe with one close A; never commit a full route on timing alone.
             keys = {"z"}
             intent = "soft-punish-probe"
-            self.attack_cooldown = 18
+            self.attack_cooldown = self._attack_cooldown(18)
             self.counts["soft_punish_probes"] += 1
         elif (
             self.attack_cooldown == 0
@@ -1928,10 +2101,27 @@ class SakuyaAdaptivePolicy:
             if selected is None:
                 keys = {toward} if distance >= 150.0 else {back}
                 intent = "human-probe-unavailable"
-                self.attack_cooldown = 24
+                self.attack_cooldown = self._attack_cooldown(24)
             else:
                 keys, intent = selected
-        elif distance > 310:
+        elif (
+            self.motion_probe_cooldown == 0
+            and self.skill_cooldown == 0
+            and self.attack_cooldown == 0
+            and me.action_id < 50
+            and me.y < 8.0
+            and distance >= 200.0
+            and spirit >= 350
+            and self.last_assessment.phase in {"neutral", "recovery"}
+            and not hazards
+        ):
+            selected = self._start_motion_hypothesis(observation, toward)
+            if selected is None:
+                keys, intent = ({toward}, "motion-catalog-exhausted")
+                self.motion_probe_cooldown = 120
+            else:
+                keys, intent = selected
+        elif distance > self.tuning["far_zone"]:
             if spirit < 400:
                 keys = {back}
                 intent = "spirit-recover"
@@ -1942,9 +2132,12 @@ class SakuyaAdaptivePolicy:
                     self.last_assessment.phase in {"reaction", "recovery"}
                     or (
                         self.last_assessment.phase == "neutral"
-                        and me.hp >= int(getattr(me, "max_hp", 10000) * 0.55)
-                        and spirit >= 500
-                        and distance >= 420.0
+                        and me.hp
+                        >= int(
+                            getattr(me, "max_hp", 10000) * self.tuning["skill_hp_floor"]
+                        )
+                        and spirit >= self.tuning["skill_spirit_floor"]
+                        and distance >= self.tuning["skill_distance_floor"]
                     )
                 )
             ):
@@ -1988,7 +2181,7 @@ class SakuyaAdaptivePolicy:
                     phase=self.last_assessment.phase,
                 )
                 learned_scores = {
-                    item.candidate.name: _bounded_bandit_score(
+                    item.candidate.name: self._bandit_score(
                         self.offense_outcomes,
                         item.candidate.name,
                         skill_outcome_context,
@@ -2056,6 +2249,7 @@ class SakuyaAdaptivePolicy:
                         **{
                             intent: item.score
                             + 0.5 * learned_scores.get(item.candidate.name, 0.0)
+                            + self.tuning["skill_bias"]
                             for intent, item in by_intent.items()
                         },
                     },
@@ -2078,7 +2272,7 @@ class SakuyaAdaptivePolicy:
                     self.queue_intent = f"space-control-{label}"
                     self.queue_legal_actions = self._decision_legal_actions
                     self.queue_behavior_probability = self._decision_probability
-                    self.skill_cooldown = 105
+                    self.skill_cooldown = round(self.tuning["skill_cooldown"])
                     self.pending_skill = 35
                     self.pending_skill_label = label
                     self.counts[f"skill_attempts:{label}"] += 1
@@ -2101,8 +2295,8 @@ class SakuyaAdaptivePolicy:
                     observation,
                     "far-movement",
                     {
-                        "far-neutral-watch": 30.0,
-                        "far-approach": 20.0 if distance > 520.0 else -25.0,
+                        "far-neutral-watch": self.tuning["far_watch"],
+                        "far-approach": self.tuning["far_approach"],
                     },
                 )
                 keys = {toward} if intent == "far-approach" else set()
@@ -2124,9 +2318,16 @@ class SakuyaAdaptivePolicy:
                     {
                         "neutral-spacing": 35.0 if distance < 185.0 else -10.0,
                         "neutral-watch": 30.0 if distance >= 185.0 else 0.0,
+                        "neutral-approach": self.tuning["neutral_approach"],
                     },
                 )
-                keys = {back} if intent == "neutral-spacing" else set()
+                keys = (
+                    {back}
+                    if intent == "neutral-spacing"
+                    else {toward}
+                    if intent == "neutral-approach"
+                    else set()
+                )
         elif (
             self.attack_cooldown == 0
             and me.action_id < 50
@@ -2138,13 +2339,31 @@ class SakuyaAdaptivePolicy:
             else:
                 keys, intent = selected
         else:
-            keys = {back}
-            intent = "close-neutral-guard"
+            intent = self._choose_legal_action(
+                observation,
+                "close-pressure",
+                {
+                    "close-neutral-guard": self.tuning["close_guard"],
+                    "close-pressure-z": (
+                        self.tuning["close_pressure"]
+                        if self.attack_cooldown == 0
+                        and me.action_id < 50
+                        and not hazards
+                        else -1000.0
+                    ),
+                },
+            )
+            if intent == "close-pressure-z":
+                keys = {"z"}
+                self.attack_cooldown = self._attack_cooldown(24)
+            else:
+                keys = {back}
 
         self.attack_cooldown = max(0, self.attack_cooldown - 1)
         self.skill_cooldown = max(0, self.skill_cooldown - 1)
         self.evade_cooldown = max(0, self.evade_cooldown - 1)
         self.cancel_cooldown = max(0, self.cancel_cooldown - 1)
+        self.motion_probe_cooldown = max(0, self.motion_probe_cooldown - 1)
         issued = frozenset(keys)
         self.cancel_graph.record_input(
             frame=observation.frame,
@@ -2179,6 +2398,11 @@ class SakuyaAdaptivePolicy:
         if not isinstance(human_contexts, dict):
             human_contexts = {}
         return {
+            "playstyle": self.playstyle,
+            "reward_profile": {
+                name: getattr(self.reward_config, name)
+                for name in self.reward_config.__dataclass_fields__
+            },
             "counts": dict(self.counts),
             "own_action_frames": {str(k): v for k, v in self.actions.most_common()},
             "enemy_action_frames": {

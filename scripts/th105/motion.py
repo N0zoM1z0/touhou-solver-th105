@@ -4,10 +4,28 @@ from __future__ import annotations
 
 
 MOTION_DIGITS: dict[str, tuple[str, ...]] = {
+    "22": ("2", "2"),
     "236": ("2", "3", "6"),
     "214": ("2", "1", "4"),
     "623": ("6", "2", "3"),
+    "421": ("4", "2", "1"),
 }
+
+BUTTON_NOTATION = {"z": "A", "x": "B", "c": "C"}
+
+
+def generated_motion_hypotheses() -> tuple[tuple[str, str, str], ...]:
+    """Return a bounded, character-agnostic fighting-motion grammar.
+
+    A hypothesis is (stable label, motion, physical button). Whether it maps
+    to a real move is deliberately learned from native outcomes rather than
+    encoded here.
+    """
+    return tuple(
+        (f"{motion}{BUTTON_NOTATION[button]}", motion, button)
+        for motion in MOTION_DIGITS
+        for button in BUTTON_NOTATION
+    )
 
 
 def _digit_chord(digit: str, toward: str) -> set[str]:
@@ -52,12 +70,7 @@ def build_motion_frames(
 
 def build_close_normal_chain(toward: str) -> list[set[str]]:
     """A -> 3A-style bootstrap chain, later gated by cancel metadata."""
-    return (
-        [{"z"}] * 3
-        + [set()] * 3
-        + [{"down", toward, "z"}] * 3
-        + [set()] * 6
-    )
+    return [{"z"}] * 3 + [set()] * 3 + [{"down", toward, "z"}] * 3 + [set()] * 6
 
 
 def _pulse(chord: set[str], pressed: int, released: int) -> list[set[str]]:
@@ -110,7 +123,9 @@ def build_jump_frames(
     return prefix + [jump] * hold_frames + [set()] * 3
 
 
-def build_flight_frames(direction: set[str], *, hold_frames: int = 12) -> list[set[str]]:
+def build_flight_frames(
+    direction: set[str], *, hold_frames: int = 12
+) -> list[set[str]]:
     """Airborne D+direction flight; physical keyboard A is the D button."""
     if not direction or direction - {"up", "down", "left", "right"}:
         raise ValueError(f"invalid flight direction {sorted(direction)!r}")

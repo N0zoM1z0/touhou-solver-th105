@@ -36,7 +36,9 @@ from .win32 import ProcessReader
 
 
 class BattleKeyboard(Protocol):
-    def set_chord(self, names: set[str], *, require_foreground: bool = True) -> None: ...
+    def set_chord(
+        self, names: set[str], *, require_foreground: bool = True
+    ) -> None: ...
 
 
 # A deliberately conservative visible bootstrap. It keeps Sakuya moving and
@@ -307,8 +309,12 @@ def _read_fighter(reader: ProcessReader, pointer: int) -> FighterState:
     if max_hp == 0 or max_hp > 30000:
         raise RuntimeError(f"invalid fighter max HP {max_hp} at {pointer:#x}")
     frame_data = reader.u32(pointer + FIGHTER_CURRENT_FRAME_DATA)
-    frame_data_flags = reader.u32(frame_data + FRAME_DATA_FLAGS) if frame_data >= 0x10000 else 0
-    attack_flags = reader.u32(frame_data + FRAME_DATA_ATTACK_FLAGS) if frame_data >= 0x10000 else 0
+    frame_data_flags = (
+        reader.u32(frame_data + FRAME_DATA_FLAGS) if frame_data >= 0x10000 else 0
+    )
+    attack_flags = (
+        reader.u32(frame_data + FRAME_DATA_ATTACK_FLAGS) if frame_data >= 0x10000 else 0
+    )
     return FighterState(
         pointer=pointer,
         vtable=reader.u32(pointer),
@@ -409,7 +415,8 @@ def read_active_projectiles(
                     frame_data=frame_data,
                     attack_flags=(
                         reader.u32(frame_data + FRAME_DATA_ATTACK_FLAGS)
-                        if frame_data >= 0x10000 else 0
+                        if frame_data >= 0x10000
+                        else 0
                     ),
                     body_box=_read_frame_box(reader, frame_data, FRAME_DATA_BODY_BOX),
                     hurt_boxes=read_frame_box_vector(
@@ -465,6 +472,7 @@ def run_adaptive_fight(
     game_build_sha256: str | None = None,
     rounds_until_rotation: int | None = None,
     exploration_rate: float = 0.08,
+    playstyle: str = "balanced",
     transition_opponent_filter: str | None = None,
     persist_online: bool = True,
 ) -> dict[str, int | float | str | object]:
@@ -475,6 +483,8 @@ def run_adaptive_fight(
         raise ValueError("rounds until rotation must be positive")
     if not 0.0 <= exploration_rate <= 1.0:
         raise ValueError("exploration rate must be between zero and one")
+    if playstyle not in {"defensive", "balanced", "aggressive"}:
+        raise ValueError(f"unknown playstyle: {playstyle}")
     state = read_battle_state(reader)
     terminal_tracker = terminal_tracker or TerminalRoundTracker()
     initial = battle_state_json(state)
@@ -500,7 +510,8 @@ def run_adaptive_fight(
     reason = "duration"
     knowledge_path = (
         telemetry_path.with_name("th105_opponent_models.json")
-        if telemetry_path is not None else None
+        if telemetry_path is not None
+        else None
     )
     base_opponent_key = f"0x{state.p2.vtable:08X}"
     opponent_key = f"{base_opponent_key}@{difficulty.casefold()}"
@@ -528,12 +539,8 @@ def run_adaptive_fight(
     # families from the same snapshot. Older code reparsed it up to twelve times.
     if knowledge_path is not None:
         knowledge_snapshot = load_knowledge(knowledge_path)
-        contextual_models = character_models_from_data(
-            knowledge_snapshot, opponent_key
-        )
-        base_models = character_models_from_data(
-            knowledge_snapshot, base_opponent_key
-        )
+        contextual_models = character_models_from_data(knowledge_snapshot, opponent_key)
+        base_models = character_models_from_data(knowledge_snapshot, base_opponent_key)
     else:
         contextual_models = character_models_from_data({}, opponent_key)
         base_models = character_models_from_data({}, base_opponent_key)
@@ -546,9 +553,7 @@ def run_adaptive_fight(
     prior_defense_model = contextual_prior("defense_responses")
     prior_offense_model = contextual_models["offense_outcomes"]
     if not prior_offense_model:
-        prior_offense_model = cold_start_offense_prior(
-            base_models["offense_outcomes"]
-        )
+        prior_offense_model = cold_start_offense_prior(base_models["offense_outcomes"])
     prior_attack_geometry = contextual_prior("attack_geometry")
     prior_cancel_graph = contextual_prior("cancel_graph")
     prior_human_demonstrations: dict[str, object] = {}
@@ -567,8 +572,7 @@ def run_adaptive_fight(
         )
 
     telemetry = (
-        BoundedJsonlWriter(telemetry_path)
-        if telemetry_path is not None else None
+        BoundedJsonlWriter(telemetry_path) if telemetry_path is not None else None
     )
     record_this_opponent = (
         transition_opponent_filter is None
@@ -588,7 +592,8 @@ def run_adaptive_fight(
             game_build_sha256=game_build_sha256,
             offline_policy_sha256=offline_artifact_sha256,
         )
-        if telemetry_path is not None and record_this_opponent else None
+        if telemetry_path is not None and record_this_opponent
+        else None
     )
 
     def compact_plugin_status(status: dict[str, object]) -> dict[str, object]:
@@ -654,7 +659,8 @@ def run_adaptive_fight(
             ),
             attack_geometry=(
                 learned_attack_geometry
-                if isinstance(learned_attack_geometry, dict) else {}
+                if isinstance(learned_attack_geometry, dict)
+                else {}
             ),
             cancel_graph=(
                 learned_cancel_graph if isinstance(learned_cancel_graph, dict) else {}
@@ -708,8 +714,10 @@ def run_adaptive_fight(
         if me.hp <= 0 or enemy.hp <= 0:
             if not terminal_reported:
                 won = (
-                    True if enemy.hp <= 0 < me.hp
-                    else False if me.hp <= 0 < enemy.hp
+                    True
+                    if enemy.hp <= 0 < me.hp
+                    else False
+                    if me.hp <= 0 < enemy.hp
                     else None
                 )
                 terminal_sequence = terminal_tracker.observe(
@@ -769,7 +777,8 @@ def run_adaptive_fight(
             keyboard.set_chord(keys)
             last_intent = (
                 "round-end-difficulty-rotate"
-                if rotation_requested else "round-end-confirm"
+                if rotation_requested
+                else "round-end-confirm"
             )
             last_enemy_projectiles = ()
             last_own_projectiles = ()
@@ -812,7 +821,10 @@ def run_adaptive_fight(
                 distance_to_projectile = math.hypot(
                     projectile.x - me.x, projectile.y - me.y
                 )
-                if nearest_enemy_projectile is None or distance_to_projectile < nearest_enemy_projectile:
+                if (
+                    nearest_enemy_projectile is None
+                    or distance_to_projectile < nearest_enemy_projectile
+                ):
                     nearest_enemy_projectile = distance_to_projectile
             decision = plugin.decide(
                 PolicyObservation(
@@ -832,6 +844,7 @@ def run_adaptive_fight(
                     difficulty=difficulty,
                     opponent_key=opponent_key,
                     exploration_rate=exploration_rate,
+                    playstyle=playstyle,
                 )
             )
             decision_frames += 1

@@ -7,13 +7,16 @@ from dataclasses import asdict, dataclass, field
 
 from .reward import (
     REWARD_VERSION,
+    RewardConfig,
     basis_points,
     damage_bin_index,
     empirical_action_value,
 )
 
 
-def combat_context(*, distance: float, enemy_y: float, enemy_x: float, phase: str) -> str:
+def combat_context(
+    *, distance: float, enemy_y: float, enemy_x: float, phase: str
+) -> str:
     distance_bucket = "close" if distance < 80 else "mid" if distance < 260 else "far"
     altitude = "ground" if enemy_y < 44 else "air"
     corner = "corner" if enemy_x < 150 or enemy_x > 1130 else "field"
@@ -39,6 +42,10 @@ class ActionOutcomeStats:
     self_damage_histogram: list[int] = field(default_factory=lambda: [0] * 8)
     terminal_win_credit: float = 0.0
     terminal_loss_credit: float = 0.0
+    effectful_trials: int = 0
+    action_change_trials: int = 0
+    projectile_spawn_trials: int = 0
+    total_displacement: int = 0
 
     @property
     def hit_rate(self) -> float:
@@ -56,7 +63,8 @@ class ActionOutcomeStats:
     def average_startup(self) -> float | None:
         return (
             self.total_startup_to_hit / self.startup_samples
-            if self.startup_samples else None
+            if self.startup_samples
+            else None
         )
 
 
@@ -68,9 +76,7 @@ def normalize_legacy_outcome_stats(stats: ActionOutcomeStats) -> None:
     # The supported build uses 10000 HP and 1000 spirit: one raw HP point is
     # one basis point, while one raw spirit point is ten basis points.
     residual_damage = max(0, stats.total_damage - stats.total_damage_bp)
-    residual_self_damage = max(
-        0, stats.total_self_damage - stats.total_self_damage_bp
-    )
+    residual_self_damage = max(0, stats.total_self_damage - stats.total_self_damage_bp)
     residual_spirit_bp = max(
         0, stats.total_spirit_cost * 10 - stats.total_spirit_cost_bp
     )
@@ -106,6 +112,12 @@ class OffenseEpisode:
     enemy_hp: int = 0
     me_hp: int = 0
     spirit: int = 0
+    start_me_x: float | None = None
+    me_x: float | None = None
+    start_action_id: int | None = None
+    me_action_id: int | None = None
+    start_projectile_count: int | None = None
+    max_projectile_count: int | None = None
 
 
 @dataclass
@@ -147,6 +159,9 @@ class ActionOutcomeModel:
         max_enemy_hp: int = 10000,
         max_me_hp: int = 10000,
         max_spirit: int = 1000,
+        me_x: float | None = None,
+        me_action_id: int | None = None,
+        projectile_count: int | None = None,
     ) -> None:
         if self.episode is not None:
             self.finish(frame)
@@ -164,9 +179,25 @@ class ActionOutcomeModel:
             enemy_hp=enemy_hp,
             me_hp=me_hp,
             spirit=spirit,
+            start_me_x=me_x,
+            me_x=me_x,
+            start_action_id=me_action_id,
+            me_action_id=me_action_id,
+            start_projectile_count=projectile_count,
+            max_projectile_count=projectile_count,
         )
 
-    def observe(self, *, frame: int, enemy_hp: int, me_hp: int, spirit: int) -> None:
+    def observe(
+        self,
+        *,
+        frame: int,
+        enemy_hp: int,
+        me_hp: int,
+        spirit: int,
+        me_x: float | None = None,
+        me_action_id: int | None = None,
+        projectile_count: int | None = None,
+    ) -> None:
         episode = self.episode
         if episode is None:
             return
@@ -175,6 +206,15 @@ class ActionOutcomeModel:
         episode.enemy_hp = enemy_hp
         episode.me_hp = me_hp
         episode.spirit = spirit
+        if me_x is not None:
+            episode.me_x = me_x
+        if me_action_id is not None:
+            episode.me_action_id = me_action_id
+        if projectile_count is not None:
+            episode.max_projectile_count = max(
+                projectile_count,
+                episode.max_projectile_count or 0,
+            )
         if frame >= episode.deadline:
             self.finish(frame)
 
@@ -187,6 +227,25 @@ class ActionOutcomeModel:
         self_damage = max(0, episode.start_me_hp - episode.me_hp)
         spirit_cost = max(0, episode.start_spirit - episode.spirit)
         commitment = max(1, frame - episode.start_frame)
+        displacement = (
+            abs(episode.me_x - episode.start_me_x)
+            if episode.me_x is not None and episode.start_me_x is not None
+            else 0.0
+        )
+        action_changed = (
+            episode.start_action_id is not None
+            and episode.me_action_id is not None
+            and episode.me_action_id != episode.start_action_id
+            and episode.me_action_id >= 300
+        )
+        projectile_spawned = (
+            episode.start_projectile_count is not None
+            and episode.max_projectile_count is not None
+            and episode.max_projectile_count > episode.start_projectile_count
+        )
+        effectful = bool(
+            damage or displacement >= 80.0 or action_changed or projectile_spawned
+        )
         # A generic caller may already use the global context. Do not apply the
         # same outcome twice when contextual and global keys are identical.
         for context in dict.fromkeys((episode.context, "*")):
@@ -203,14 +262,19 @@ class ActionOutcomeModel:
             stats.normalized_samples += 1
             stats.total_damage_bp += damage_bp
             stats.total_self_damage_bp += self_damage_bp
-            stats.total_spirit_cost_bp += basis_points(
-                spirit_cost, episode.max_spirit
-            )
+            stats.total_spirit_cost_bp += basis_points(spirit_cost, episode.max_spirit)
             stats.self_damage_histogram[damage_bin_index(self_damage_bp)] += 1
             if damage:
                 stats.connections += 1
             if self_damage:
                 stats.punished_trials += 1
+            stats.total_displacement += round(displacement)
+            if action_changed:
+                stats.action_change_trials += 1
+            if projectile_spawned:
+                stats.projectile_spawn_trials += 1
+            if effectful:
+                stats.effectful_trials += 1
             if episode.first_hit_frame is not None:
                 stats.startup_samples += 1
                 stats.total_startup_to_hit += (
@@ -241,9 +305,7 @@ class ActionOutcomeModel:
         else:
             self.rounds.draws += 1
         self.rounds.total_remaining_hp_bp += basis_points(me_hp, max_me_hp)
-        self.rounds.total_enemy_remaining_hp_bp += basis_points(
-            enemy_hp, max_enemy_hp
-        )
+        self.rounds.total_enemy_remaining_hp_bp += basis_points(enemy_hp, max_enemy_hp)
         if won is None:
             self.recent.clear()
             return
@@ -268,11 +330,22 @@ class ActionOutcomeModel:
             return contextual
         return self.table.get("*", {}).get(label) or contextual
 
-    def adjustment(self, label: str, context: str, *, explore: bool = False) -> float:
+    def adjustment(
+        self,
+        label: str,
+        context: str,
+        *,
+        explore: bool = False,
+        reward_config: RewardConfig | None = None,
+    ) -> float:
         stats = self.stats_for(label, context)
         if stats is None or stats.trials == 0:
             return 900.0 if explore else 0.0
-        observed_utility = empirical_action_value(stats)
+        observed_utility = (
+            empirical_action_value(stats, reward_config)
+            if reward_config
+            else empirical_action_value(stats)
+        )
         confidence = min(1.0, stats.trials / 6.0)
         return max(-1200.0, min(1200.0, (observed_utility - 900.0) * confidence))
 
@@ -292,7 +365,9 @@ class ActionOutcomeModel:
             return
         for context, raw_row in state.items():
             if context == "__reward__":
-                if isinstance(raw_row, dict) and isinstance(raw_row.get("rounds"), dict):
+                if isinstance(raw_row, dict) and isinstance(
+                    raw_row.get("rounds"), dict
+                ):
                     raw_rounds = raw_row["rounds"]
                     self.rounds = RoundOutcomeStats(
                         **{
@@ -313,7 +388,8 @@ class ActionOutcomeModel:
                         histogram = raw.get(name, [0] * 8)
                         values[name] = (
                             [max(0, int(value)) for value in histogram[:8]]
-                            if isinstance(histogram, list) else [0] * 8
+                            if isinstance(histogram, list)
+                            else [0] * 8
                         )
                         values[name] += [0] * (8 - len(values[name]))
                     elif name in {"terminal_win_credit", "terminal_loss_credit"}:

@@ -27,6 +27,34 @@ class ActionOutcomeTests(unittest.TestCase):
         model = ActionOutcomeModel()
         self.assertEqual(model.adjustment("combo", "ctx", explore=True), 900.0)
 
+    def test_non_damage_motion_effect_is_preserved_as_compact_statistics(self) -> None:
+        model = ActionOutcomeModel()
+        model.begin(
+            "motion:character:22B",
+            "ctx",
+            frame=0,
+            commitment=8,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
+            me_x=100.0,
+            me_action_id=0,
+            projectile_count=0,
+        )
+        model.observe(
+            frame=8,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=900,
+            me_x=360.0,
+            me_action_id=600,
+            projectile_count=0,
+        )
+        stats = model.table["ctx"]["motion:character:22B"]
+        self.assertEqual(stats.effectful_trials, 1)
+        self.assertEqual(stats.action_change_trials, 1)
+        self.assertEqual(stats.total_displacement, 260)
+
     def test_failed_action_is_downranked(self) -> None:
         model = ActionOutcomeModel()
         for index in range(6):

@@ -24,6 +24,10 @@ class AgentParserTests(unittest.TestCase):
         self.assertEqual(args.cycle_round_quotas, (2, 4, 8, 10))
         self.assertIsNone(args.rounds_per_difficulty)
 
+    def test_aggressive_playstyle_is_selectable(self) -> None:
+        args = build_parser().parse_args(["auto-arcade", "--playstyle", "aggressive"])
+        self.assertEqual(args.playstyle, "aggressive")
+
     def test_equal_quota_override_remains_available(self) -> None:
         args = build_parser().parse_args(
             [

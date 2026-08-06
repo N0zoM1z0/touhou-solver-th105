@@ -13,6 +13,7 @@ from th105.motion import (
     build_flight_frames,
     build_jump_frames,
     build_motion_frames,
+    generated_motion_hypotheses,
 )
 
 
@@ -59,6 +60,14 @@ class MotionTests(unittest.TestCase):
         self.assertIn({"up", "left"}, super_jump)
         flight = build_flight_frames({"up", "right"})
         self.assertEqual(flight[0], {"a", "up", "right"})
+
+    def test_generated_catalog_contains_unique_double_down_hypotheses(self) -> None:
+        catalog = generated_motion_hypotheses()
+        labels = [label for label, _motion, _button in catalog]
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertEqual(len(labels), 15)
+        self.assertIn(("22B", "22", "x"), catalog)
+        self.assertIn(("22C", "22", "c"), catalog)
 
 
 if __name__ == "__main__":

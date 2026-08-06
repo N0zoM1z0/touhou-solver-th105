@@ -177,7 +177,25 @@ For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
 encounter atomically checkpoints its per-opponent model, with an additional
 60-second crash-recovery checkpoint; Ctrl+C restores the input bridge before
 exit. A process lock rejects a second input controller before it can compete
-for keys or model checkpoints. Neutral offense uses a bounded contextual bandit: it
+for keys or model checkpoints.
+
+Select `--playstyle defensive`, `balanced`, or `aggressive` to reinterpret the
+same stored outcome components with different reward weights and action priors.
+Profiles do not duplicate or invalidate the corpus: defensive values survival
+and tail-risk avoidance, balanced is the default, and aggressive increases
+damage/effect credit, approach pressure, skill cadence, and safe-window
+exploration while retaining every native hazard and commitment gate.
+
+Move discovery is character-agnostic at the framework layer. A bounded motion
+grammar currently generates `22`, `236`, `214`, `623`, and `421` with each of
+the physical `Z/X/C` attack buttons. Known Sakuya commands are only seeds; all
+other commands are hypotheses. The agent records action-ID changes,
+displacement, projectile creation, damage, self-damage, spirit, whiffs, and
+commitment, so nonexistent commands lose selection probability while useful
+teleports, attacks, or setup moves retain value. Motion outcomes are keyed by
+the active 1P vtable and combat context.
+
+Neutral offense uses a bounded contextual bandit: it
 tries short `toward+Z`, `toward+A+Z/X/C`, and rising-Z probes, measures damage,
 self-damage, spirit cost, and commitment, exploits good results, and retains a
 shrinking exploration bonus. This works without a human corpus; demonstrations

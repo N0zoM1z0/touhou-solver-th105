@@ -7,7 +7,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.offense_learning import ActionOutcomeStats
-from th105.reward import damage_bin_index, empirical_action_value, upper_tail_mean_bp
+from th105.reward import (
+    damage_bin_index,
+    empirical_action_value,
+    reward_for_playstyle,
+    upper_tail_mean_bp,
+)
 
 
 def stats_for(outcomes: list[tuple[int, int, int]]) -> ActionOutcomeStats:
@@ -40,11 +45,21 @@ class RewardTests(unittest.TestCase):
     def test_tail_risk_penalizes_same_mean_with_bad_outlier(self) -> None:
         steady = stats_for([(500, 250, 0)] * 5)
         risky = stats_for([(500, 0, 0)] * 4 + [(500, 1250, 0)])
-        self.assertGreater(empirical_action_value(steady), empirical_action_value(risky))
+        self.assertGreater(
+            empirical_action_value(steady), empirical_action_value(risky)
+        )
 
     def test_histogram_tail_is_bounded_and_compact(self) -> None:
         histogram = [4, 0, 0, 0, 1, 0, 0, 0]
         self.assertEqual(upper_tail_mean_bp(histogram), 1000.0)
+
+    def test_aggressive_profile_values_the_same_trade_more_highly(self) -> None:
+        trade = stats_for([(850, 400, 100)] * 4)
+        trade.effectful_trials = trade.trials
+        self.assertGreater(
+            empirical_action_value(trade, reward_for_playstyle("aggressive")),
+            empirical_action_value(trade, reward_for_playstyle("defensive")),
+        )
 
 
 if __name__ == "__main__":

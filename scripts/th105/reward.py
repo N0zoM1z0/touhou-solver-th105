@@ -29,7 +29,9 @@ def damage_bin_index(damage_bp: int) -> int:
     return len(SELF_DAMAGE_BIN_UPPER_BP) - 1
 
 
-def upper_tail_mean_bp(histogram: Sequence[int], *, tail_fraction: float = 0.20) -> float:
+def upper_tail_mean_bp(
+    histogram: Sequence[int], *, tail_fraction: float = 0.20
+) -> float:
     """Conservative CVaR-like estimate from eight compact histogram counters."""
     total = sum(max(0, int(count)) for count in histogram)
     if total <= 0:
@@ -60,12 +62,51 @@ class RewardConfig:
     commitment_cost_bp_per_second: float = 60.0
     tail_risk_weight: float = 0.45
     terminal_weight_bp: float = 1400.0
+    effect_weight_bp: float = 120.0
 
 
 DEFAULT_REWARD = RewardConfig()
 
+# Stored corpora contain the outcome components, not these scalar weights.
+# Profiles can therefore reinterpret all old and future experience without a
+# migration or duplicated datasets.
+REWARD_PROFILES: dict[str, RewardConfig] = {
+    "defensive": DEFAULT_REWARD,
+    "balanced": RewardConfig(
+        damage_weight=1.15,
+        self_damage_weight=1.35,
+        spirit_weight=0.10,
+        whiff_cost_bp=300.0,
+        punished_cost_bp=400.0,
+        commitment_cost_bp_per_second=48.0,
+        tail_risk_weight=0.35,
+        terminal_weight_bp=1400.0,
+        effect_weight_bp=180.0,
+    ),
+    "aggressive": RewardConfig(
+        damage_weight=1.45,
+        self_damage_weight=1.00,
+        spirit_weight=0.07,
+        whiff_cost_bp=180.0,
+        punished_cost_bp=280.0,
+        commitment_cost_bp_per_second=24.0,
+        tail_risk_weight=0.20,
+        terminal_weight_bp=1400.0,
+        effect_weight_bp=320.0,
+    ),
+}
 
-def empirical_action_value(stats: object, config: RewardConfig = DEFAULT_REWARD) -> float:
+
+def reward_for_playstyle(playstyle: str) -> RewardConfig:
+    try:
+        return REWARD_PROFILES[playstyle]
+    except KeyError as exc:
+        raise ValueError(f"unknown playstyle: {playstyle}") from exc
+
+
+def empirical_action_value(
+    stats: object, config: RewardConfig = DEFAULT_REWARD
+) -> float:
     """Score aggregate sufficient statistics without needing raw frame logs."""
     trials = max(1, int(getattr(stats, "trials", 0)))
     normalized_samples = int(getattr(stats, "normalized_samples", 0))
@@ -86,9 +127,7 @@ def empirical_action_value(stats: object, config: RewardConfig = DEFAULT_REWARD)
 
     connections = int(getattr(stats, "connections", 0))
     punished = int(getattr(stats, "punished_trials", 0))
-    commitment_seconds = (
-        float(getattr(stats, "total_commitment", 0)) / trials / 60.0
-    )
+    commitment_seconds = float(getattr(stats, "total_commitment", 0)) / trials / 60.0
     histogram = getattr(stats, "self_damage_histogram", ())
     tail_bp = (
         upper_tail_mean_bp(histogram)
@@ -100,6 +139,7 @@ def empirical_action_value(stats: object, config: RewardConfig = DEFAULT_REWARD)
         float(getattr(stats, "terminal_win_credit", 0.0))
         - float(getattr(stats, "terminal_loss_credit", 0.0))
     ) / trials
+    effect_rate = float(getattr(stats, "effectful_trials", 0)) / trials
     return (
         config.damage_weight * damage_bp
         - config.self_damage_weight * self_damage_bp
@@ -109,4 +149,5 @@ def empirical_action_value(stats: object, config: RewardConfig = DEFAULT_REWARD)
         - config.commitment_cost_bp_per_second * commitment_seconds
         - config.tail_risk_weight * excess_tail
         + config.terminal_weight_bp * terminal_credit
+        + config.effect_weight_bp * effect_rate
     )

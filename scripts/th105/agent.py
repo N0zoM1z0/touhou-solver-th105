@@ -450,6 +450,7 @@ def fight(args: argparse.Namespace) -> int:
                 policy_path=args.policy_plugin,
                 telemetry_path=args.telemetry_path,
                 difficulty=DIFFICULTIES[cpu_difficulty(reader)],
+                playstyle=args.playstyle,
                 session_id=uuid.uuid4().hex,
                 game_build_sha256=str(identity.get("sha256", "")) or None,
             )
@@ -620,6 +621,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                     min(round_targets) if round_targets else None
                                 ),
                                 exploration_rate=args.exploration_rate,
+                                playstyle=args.playstyle,
                                 transition_opponent_filter=(
                                     f"0x{CHARACTER_VTABLES[args.collect_opponent]:08X}"
                                     if args.collect_opponent
@@ -881,6 +883,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=float, default=15.0)
     p.add_argument("--policy", choices=("adaptive", "bootstrap"), default="adaptive")
     p.add_argument(
+        "--playstyle",
+        choices=("defensive", "balanced", "aggressive"),
+        default="balanced",
+        help="policy reward/action profile (default: balanced)",
+    )
+    p.add_argument(
         "--policy-plugin",
         type=Path,
         default=Path(__file__).with_name("policies") / "adaptive.py",
@@ -939,6 +947,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--frame-hz", type=float, default=60.0)
     p.add_argument("--policy", choices=("adaptive", "bootstrap"), default="adaptive")
+    p.add_argument(
+        "--playstyle",
+        choices=("defensive", "balanced", "aggressive"),
+        default="balanced",
+        help="policy reward/action profile (default: balanced)",
+    )
     p.add_argument(
         "--policy-plugin",
         type=Path,
