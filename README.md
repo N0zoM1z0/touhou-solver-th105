@@ -288,6 +288,21 @@ Every option transition and sanitized encounter summary records the loaded
 offline-policy SHA-256. Physical A/B results therefore remain attributable even
 when several distilled artifacts are installed into the same runtime path.
 
+Run a fair four-candidate physical screen with a fixed Lunatic difficulty and
+the same online-learner checkpoint for every candidate:
+
+```bash
+python scripts/run_th105_policy_ab.py \
+  --rounds 10 \
+  --output runtime/experiments/policy-zoo-physical-20260806
+```
+
+Each candidate runs in a fresh game process. Its distilled bundle is installed
+atomically, the common online baseline is restored before play, and controller
+output, session transitions, terminal summaries, plus final learned models are
+kept below its experiment directory. The common online baseline is restored
+again after the complete screen.
+
 ### Learning from human Sakuya play
 
 Stop `auto-arcade`, leave the exact supported game running, then start the
