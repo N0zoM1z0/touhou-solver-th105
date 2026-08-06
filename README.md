@@ -84,15 +84,17 @@ The launcher is equivalent to
 `--difficulty curriculum` promotes one level after sustained wins and demotes
 one level after sustained losses; pass `--difficulty easy`, `normal`, `hard`, or
 `lunatic` for a fixed campaign, or `--difficulty cycle` to rotate
-Easy→Normal→Hard→Lunatic after complete Arcade matches. Learned observations
-are stored under separate opponent-and-difficulty keys. The injected
+Easy→Normal→Hard→Lunatic after a fixed quota of native terminal rounds. The
+quota defaults to six and is configurable with `--rounds-per-difficulty`.
+Learned observations are stored under separate opponent-and-difficulty keys. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Pass `--foreground-only` to restore
 strict foreground ownership. Round-end and Arcade dialogue screens receive
 sparse Z edges so the campaign can continue.
 
 For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
-`auto-arcade --launch --p1-character sakuya --continuous`. Each completed
+`auto-arcade --launch --p1-character sakuya --difficulty cycle
+--rounds-per-difficulty 6 --continuous`. Each completed
 encounter atomically checkpoints its per-opponent model, with an additional
 60-second crash-recovery checkpoint; Ctrl+C restores the input bridge before
 exit. A process lock rejects a second input controller before it can compete

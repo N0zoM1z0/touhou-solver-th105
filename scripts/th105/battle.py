@@ -442,10 +442,13 @@ def run_adaptive_fight(
     terminal_tracker: TerminalRoundTracker | None = None,
     session_id: str | None = None,
     game_build_sha256: str | None = None,
+    rounds_until_rotation: int | None = None,
 ) -> dict[str, int | float | str | object]:
     """Sense/actuate shell around a fail-safe hot-reloadable combat policy."""
     if seconds <= 0 or frame_hz <= 0:
         raise ValueError("battle duration and frame rate must be positive")
+    if rounds_until_rotation is not None and rounds_until_rotation <= 0:
+        raise ValueError("rounds until rotation must be positive")
     state = read_battle_state(reader)
     terminal_tracker = terminal_tracker or TerminalRoundTracker()
     initial = battle_state_json(state)
@@ -455,6 +458,7 @@ def run_adaptive_fight(
     frames = guard_frames = projectile_guard_frames = decision_frames = 0
     round_end_frames = 0
     round_wins = round_losses = round_draws = 0
+    rotation_requested = False
     projectile_read_failures = consecutive_projectile_read_failures = 0
     max_consecutive_projectile_read_failures = 0
     terminal_reported = False
@@ -671,6 +675,12 @@ def run_adaptive_fight(
                         round_losses += 1
                     else:
                         round_draws += 1
+                    completed_rounds = round_wins + round_losses + round_draws
+                    if (
+                        rounds_until_rotation is not None
+                        and completed_rounds >= rounds_until_rotation
+                    ):
+                        rotation_requested = True
                     emit(
                         "round-terminal",
                         {
@@ -686,11 +696,16 @@ def run_adaptive_fight(
                         },
                     )
                 terminal_reported = True
-            # Z rising edges advance round-result text and post-fight dialogue.
-            # Keep them sparse so one edge cannot leak through several screens.
-            keys = {"z"} if round_end_frames % 30 == 0 else set()
+            # Dynamic difficulty quotas leave the result screen with X; normal
+            # play uses Z to continue. Keep rising edges sparse so one input
+            # cannot leak through several screens.
+            result_key = "x" if rotation_requested else "z"
+            keys = {result_key} if round_end_frames % 30 == 0 else set()
             keyboard.set_chord(keys)
-            last_intent = "round-end-confirm"
+            last_intent = (
+                "round-end-difficulty-rotate"
+                if rotation_requested else "round-end-confirm"
+            )
             last_enemy_projectiles = ()
             last_own_projectiles = ()
             nearest_enemy_projectile = None
@@ -840,6 +855,7 @@ def run_adaptive_fight(
         "round_wins": round_wins,
         "round_losses": round_losses,
         "round_draws": round_draws,
+        "rotation_requested": rotation_requested,
         "projectile_read_failures": projectile_read_failures,
         "max_consecutive_projectile_read_failures": (
             max_consecutive_projectile_read_failures

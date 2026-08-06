@@ -9,5 +9,5 @@ if not exist "%TH105_PYTHON%" (
   exit /b 1
 )
 
-"%TH105_PYTHON%" "%~dp0scripts\run_th105_agent.py" auto-arcade --launch --p1-character sakuya --difficulty curriculum --continuous %*
+"%TH105_PYTHON%" "%~dp0scripts\run_th105_agent.py" auto-arcade --launch --p1-character sakuya --difficulty cycle --rounds-per-difficulty 6 --continuous %*
 exit /b %errorlevel%

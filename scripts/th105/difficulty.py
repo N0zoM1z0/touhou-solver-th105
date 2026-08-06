@@ -16,6 +16,56 @@ def next_cyclic_difficulty(level: int) -> str:
 
 
 @dataclass
+class FixedRoundDifficultyCycle:
+    """Rotate only after an exact number of native terminal rounds."""
+
+    level: int
+    rounds_per_difficulty: int = 6
+    completed_rounds: int = 0
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.level < len(DIFFICULTIES):
+            raise ValueError(f"invalid initial difficulty level {self.level}")
+        if self.rounds_per_difficulty <= 0:
+            raise ValueError("rounds per difficulty must be positive")
+        if self.completed_rounds < 0:
+            raise ValueError("completed rounds cannot be negative")
+
+    @property
+    def difficulty(self) -> str:
+        return DIFFICULTIES[self.level]
+
+    @property
+    def rotation_due(self) -> bool:
+        return self.completed_rounds >= self.rounds_per_difficulty
+
+    @property
+    def remaining_rounds(self) -> int:
+        return max(0, self.rounds_per_difficulty - self.completed_rounds)
+
+    def record(self, *, wins: int = 0, losses: int = 0, draws: int = 0) -> None:
+        if min(wins, losses, draws) < 0:
+            raise ValueError("round counts cannot be negative")
+        self.completed_rounds += wins + losses + draws
+
+    def choose(self) -> str:
+        if self.rotation_due:
+            self.level = (self.level + 1) % len(DIFFICULTIES)
+            self.completed_rounds = 0
+        return self.difficulty
+
+    def status(self) -> dict[str, int | str | bool]:
+        return {
+            "difficulty": self.difficulty,
+            "level": self.level,
+            "completed_rounds": self.completed_rounds,
+            "rounds_per_difficulty": self.rounds_per_difficulty,
+            "remaining_rounds": self.remaining_rounds,
+            "rotation_due": self.rotation_due,
+        }
+
+
+@dataclass
 class DifficultyCurriculum:
     """Promote/demote one step from a bounded window of native round results."""
 

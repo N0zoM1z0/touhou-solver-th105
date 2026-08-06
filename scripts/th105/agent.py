@@ -27,7 +27,7 @@ from .controller_lock import (
     ControllerLock,
     default_controller_lock_path,
 )
-from .difficulty import DifficultyCurriculum, next_cyclic_difficulty
+from .difficulty import DifficultyCurriculum, FixedRoundDifficultyCycle
 from .battle import (
     TerminalRoundTracker,
     battle_state_json,
@@ -56,6 +56,13 @@ def target_path(game_dir: Path) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"missing game executable: {path}")
     return path
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
 
 
 def open_target(api: Win32, game_dir: Path) -> tuple[ProcessReader, dict[str, object]]:
@@ -439,6 +446,10 @@ def auto_arcade(args: argparse.Namespace) -> int:
         api.focus(pid, args.timeout)
         keyboard.release_all(require_foreground=True)
         curriculum = DifficultyCurriculum(cpu_difficulty(reader))
+        fixed_cycle = FixedRoundDifficultyCycle(
+            cpu_difficulty(reader),
+            rounds_per_difficulty=args.rounds_per_difficulty,
+        )
         terminal_tracker = TerminalRoundTracker()
         active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
 
@@ -446,7 +457,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
             if args.difficulty == "curriculum":
                 return curriculum.choose()
             if args.difficulty == "cycle":
-                return next_cyclic_difficulty(cpu_difficulty(reader))
+                return fixed_cycle.choose()
             return args.difficulty
 
         if scene_id(reader) == 5 and game_mode(reader) == 1:
@@ -511,6 +522,10 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 game_build_sha256=(
                                     str(identity.get("sha256", "")) or None
                                 ),
+                                rounds_until_rotation=(
+                                    max(1, fixed_cycle.remaining_rounds)
+                                    if args.difficulty == "cycle" else None
+                                ),
                             )
                         else:
                             encounter = run_bootstrap_fight(
@@ -546,6 +561,12 @@ def auto_arcade(args: argparse.Namespace) -> int:
                         losses=int(encounter.get("round_losses", 0)),
                         draws=int(encounter.get("round_draws", 0)),
                     )
+                    if args.difficulty == "cycle":
+                        fixed_cycle.record(
+                            wins=int(encounter.get("round_wins", 0)),
+                            losses=int(encounter.get("round_losses", 0)),
+                            draws=int(encounter.get("round_draws", 0)),
+                        )
                     continue
                 keyboard.release_all(require_foreground=args.foreground_only)
                 if current == 6:
@@ -553,7 +574,33 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     # fresh fighter pointers, so wait and reacquire in scene 5.
                     time.sleep(0.05)
                     continue
-                if current == 3 and args.difficulty in {"curriculum", "cycle"}:
+                if current == 3 and args.difficulty == "cycle":
+                    if not fixed_cycle.rotation_due:
+                        keyboard.tap("z", hold_ms=60, gap_ms=500)
+                        transitions.append(
+                            {
+                                "from": current,
+                                "to": scene_id(reader),
+                                "event": "difficulty-quota-continue",
+                                "completed_rounds": fixed_cycle.completed_rounds,
+                                "rounds_per_difficulty": (
+                                    fixed_cycle.rounds_per_difficulty
+                                ),
+                            }
+                        )
+                        continue
+                    before = current
+                    keyboard.tap("x", hold_ms=60, gap_ms=500)
+                    transitions.append(
+                        {
+                            "from": before,
+                            "to": scene_id(reader),
+                            "event": "difficulty-quota-complete",
+                            "completed_rounds": fixed_cycle.completed_rounds,
+                        }
+                    )
+                    continue
+                if current == 3 and args.difficulty == "curriculum":
                     # A completed Arcade match returns to character select, not
                     # directly to the main menu. Confirming here caused an
                     # infinite same-difficulty rematch, so dynamic schedulers
@@ -608,6 +655,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 "difficulty_mode": args.difficulty,
                 "active_difficulty": active_difficulty,
                 "curriculum": curriculum.status(),
+                "fixed_cycle": fixed_cycle.status(),
                 "session_id": controller_session_id,
             }
         print(
@@ -723,6 +771,12 @@ def build_parser() -> argparse.ArgumentParser:
             "fixed CPU difficulty, adaptive curriculum (default), or one-level "
             "rotation after each Arcade campaign"
         ),
+    )
+    p.add_argument(
+        "--rounds-per-difficulty",
+        type=positive_int,
+        default=6,
+        help="native terminal rounds per level in cycle mode (default: 6)",
     )
     duration = p.add_mutually_exclusive_group()
     duration.add_argument("--battle-seconds", type=float, default=0.0)

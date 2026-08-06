@@ -6,10 +6,31 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.difficulty import DifficultyCurriculum, next_cyclic_difficulty
+from th105.difficulty import (
+    DifficultyCurriculum,
+    FixedRoundDifficultyCycle,
+    next_cyclic_difficulty,
+)
 
 
 class DifficultyCurriculumTests(unittest.TestCase):
+    def test_fixed_cycle_waits_for_exact_round_quota(self) -> None:
+        cycle = FixedRoundDifficultyCycle(2, rounds_per_difficulty=6)
+        cycle.record(wins=3, losses=2)
+        self.assertEqual(cycle.choose(), "hard")
+        self.assertEqual(cycle.remaining_rounds, 1)
+        cycle.record(draws=1)
+        self.assertTrue(cycle.rotation_due)
+        self.assertEqual(cycle.choose(), "lunatic")
+        self.assertEqual(cycle.completed_rounds, 0)
+
+    def test_fixed_cycle_wraps_and_rejects_bad_quota(self) -> None:
+        cycle = FixedRoundDifficultyCycle(3, rounds_per_difficulty=1)
+        cycle.record(losses=1)
+        self.assertEqual(cycle.choose(), "easy")
+        with self.assertRaises(ValueError):
+            FixedRoundDifficultyCycle(0, rounds_per_difficulty=0)
+
     def test_cycle_advances_and_wraps(self) -> None:
         self.assertEqual(next_cyclic_difficulty(2), "lunatic")
         self.assertEqual(next_cyclic_difficulty(3), "easy")
