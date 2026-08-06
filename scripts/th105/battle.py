@@ -152,15 +152,21 @@ def cold_start_offense_prior(state: object) -> dict[str, object]:
     return cloned
 
 
-def round_end_confirm_keys(round_end_frames: int) -> set[str]:
-    """Advance both round results and post-match dialogue with sparse Z edges.
+def round_end_confirm_keys(
+    round_end_frames: int, *, rotation_requested: bool = False
+) -> set[str]:
+    """Advance Arena dialogue, then leave its result screen when rotating.
 
-    Scene 5 remains active for Arena dialogue after the deciding round.  X
-    cannot dismiss that dialogue, so difficulty rotation must wait until Z has
-    advanced the game to character select; the outer campaign controller then
-    backs out with X and changes the CPU difficulty there.
+    Scene 5 remains active for both states: dialogue accepts Z while the final
+    result accepts X.  Alternating sparse edges is safe because an intermediate
+    X is ignored by dialogue, while an intermediate-round HP reset immediately
+    returns control to the combat policy before the next edge is emitted.
     """
-    return {"z"} if round_end_frames % 30 == 0 else set()
+    if round_end_frames % 30:
+        return set()
+    if rotation_requested and round_end_frames % 60 == 30:
+        return {"x"}
+    return {"z"}
 
 
 @dataclass(frozen=True)
@@ -707,11 +713,12 @@ def run_adaptive_fight(
                         },
                     )
                 terminal_reported = True
-            # Both the between-round result and Arena's post-match dialogue
-            # live in scene 5 and require Z.  Difficulty rotation happens only
-            # after this reaches character select, where the outer controller
-            # can safely use X without deadlocking the dialogue.
-            keys = round_end_confirm_keys(round_end_frames)
+            # Arena keeps dialogue and its final result inside scene 5: Z
+            # advances dialogue, while X leaves the result when a difficulty
+            # change is pending.  Sparse alternating edges cover both states.
+            keys = round_end_confirm_keys(
+                round_end_frames, rotation_requested=rotation_requested
+            )
             keyboard.set_chord(keys)
             last_intent = (
                 "round-end-difficulty-rotate"
