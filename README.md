@@ -306,6 +306,10 @@ output, session transitions, terminal summaries, plus final learned models are
 kept below its experiment directory. The common online baseline is restored
 again after the complete screen.
 
+The first four-candidate screen, its integration findings, and the decision not
+to promote an artifact yet are recorded in
+[`notes/PHYSICAL_POLICY_ZOO_20260806.md`](notes/PHYSICAL_POLICY_ZOO_20260806.md).
+
 ### Learning from human Sakuya play
 
 Stop `auto-arcade`, leave the exact supported game running, then start the
