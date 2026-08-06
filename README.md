@@ -185,6 +185,39 @@ contexts fall back to the online contextual bandit. The versioning and A/B
 contract is documented in
 [`notes/OFFLINE_TRAINING.md`](notes/OFFLINE_TRAINING.md#outcome-learning-is-separate-from-gameplay-preference).
 
+To compare several CPU model families without changing the runtime contract,
+install the policy-zoo dependencies and train each candidate against the same
+chronological complete-episode split:
+
+```bash
+pip install -r requirements-cpu-train-zoo.txt
+
+python scripts/train_th105_zoo.py --algorithm catboost-ensemble \
+  --input dataset/data/transitions.jsonl.gz \
+  --corpus-manifest dataset/manifest.json --output policy-catboost-ensemble \
+  --threads 32 --iterations 900 --depth 8 --members 5
+
+python scripts/train_th105_zoo.py --algorithm xgboost \
+  --input dataset/data/transitions.jsonl.gz \
+  --corpus-manifest dataset/manifest.json --output policy-xgboost \
+  --threads 32 --iterations 1200 --depth 8
+
+python scripts/train_th105_zoo.py --algorithm extra-trees \
+  --input dataset/data/transitions.jsonl.gz \
+  --corpus-manifest dataset/manifest.json --output policy-extra-trees \
+  --threads 32 --trees 512 --depth 18
+
+python scripts/compare_th105_policy_bundles.py \
+  policy-catboost-ensemble policy-xgboost policy-extra-trees
+```
+
+The comparison reports held-out metrics per outcome head and pairwise distilled
+top-action agreement. A lower transition-level error is not a promotion gate:
+the final choice still requires shadow validation and complete physical rounds.
+The current corpus has no known legal-action set, so it cannot support credible
+counterfactual CQL/IQL-style offline-policy claims; the alternative trainers
+remain outcome models behind the native legal and hazard gates.
+
 Install a returned bundle only after its manifest, model hash, and exact game
 build pass validation:
 

@@ -33,6 +33,10 @@ lunatic30/
     manifest.json
     distilled_policy.json
     models/
+  catboost-ensemble5/
+  xgboost-hist/
+  extra-trees/
+  comparison.json
 ```
 
 Additional algorithm families use sibling directories under `lunatic30/`.
