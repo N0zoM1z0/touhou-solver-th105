@@ -87,7 +87,7 @@ repositories.
 | Content | Repository | Verified revision |
 | --- | --- | --- |
 | Legacy Lunatic30 corpus (not reused) | [`Joh1rreq/touhou-solver-th105-corpus`](https://huggingface.co/datasets/Joh1rreq/touhou-solver-th105-corpus) | `fbd13cb9c900c81d3623a9c7ac515896e2f00800` |
-| Autonomous-route corpus | [`Joh1rreq/touhou-solver-th105-autonomous-corpus`](https://huggingface.co/datasets/Joh1rreq/touhou-solver-th105-autonomous-corpus) | action schema 3 |
+| Autonomous-route corpus | [`Joh1rreq/touhou-solver-th105-autonomous-corpus`](https://huggingface.co/datasets/Joh1rreq/touhou-solver-th105-autonomous-corpus) | `f26cf2a3e821d6f01deeafe549432c5316e9321b` |
 | Four trained policy bundles | [`Joh1rreq/touhou-solver-th105-policy-zoo`](https://huggingface.co/Joh1rreq/touhou-solver-th105-policy-zoo) | `ccc35480bfe2c73437b5a9c114c4911dcd80101d` |
 
 After cloning or pulling this repository on a training machine, install the Hub
