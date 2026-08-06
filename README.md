@@ -89,6 +89,9 @@ weighted quotas default to 2/4/8/10 respectively, assigning 75% of training
 rounds to Hard and Lunatic. Override them with
 `--cycle-round-quotas EASY,NORMAL,HARD,LUNATIC`, or use
 `--rounds-per-difficulty N` for an equal quota.
+Pass `--round-limit N` to stop at the first complete Arena match boundary at or
+after N native terminal rounds; the reported actual count can exceed N by at
+most the remainder of the current match.
 Learned observations are stored under separate opponent-and-difficulty keys. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Pass `--foreground-only` to restore
@@ -141,8 +144,38 @@ python scripts/evaluate_th105_learning.py
 The evaluator reports per-opponent/difficulty coverage, offense/defense rates,
 tail damage, and Wilson confidence intervals from durable evidence. It is a
 descriptive monitoring gate, not a substitute for complete-round A/B testing.
-The future GPU corpus, artifact, and promotion protocol is specified in
+The multi-core CPU corpus, artifact, and promotion protocol is specified in
 [`notes/OFFLINE_TRAINING.md`](notes/OFFLINE_TRAINING.md).
+
+Export one completed controller session as a deterministic, privacy-scanned
+dataset snapshot with:
+
+```bash
+python scripts/export_th105_session.py \
+  --session-id SESSION_ID --started-at UNIX_START --ended-at UNIX_END \
+  --experiment-name lunatic30 --target-rounds 30 \
+  --baseline-dir runtime/experiments/lunatic30/baseline \
+  --output runtime/experiments/lunatic30/dataset
+```
+
+The export contains gzip JSONL transitions, sanitized terminal summaries,
+baseline/final compact models, a dataset card, independent schema/reward
+versions, and SHA-256 hashes. It rejects credentials and local filesystem paths.
+On a CPU training server, install `requirements-cpu-train.txt` and train the
+first multi-head outcome model with:
+
+```bash
+python scripts/train_th105_cpu.py \
+  --input dataset/data/transitions.jsonl.gz \
+  --corpus-manifest dataset/manifest.json --output policy-lunatic30 \
+  --threads 96
+```
+
+The trainer uses CPU-only categorical boosted trees for separate damage,
+self-damage/tail, spirit, punish, and terminal heads, then distills predictions
+into a compact context/action table. Training algorithm and runtime artifact are
+decoupled: native legality/hazard gates remain mandatory, while unknown or
+unsupported contexts fall back to the online contextual bandit.
 
 ### Learning from human Sakuya play
 

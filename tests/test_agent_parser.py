@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -55,10 +57,11 @@ class AgentParserTests(unittest.TestCase):
         self.assertEqual(args.round_limit, 30)
 
     def test_round_limit_rejects_zero(self) -> None:
-        with self.assertRaises(SystemExit):
-            build_parser().parse_args(
-                ["auto-arcade", "--round-limit", "0"]
-            )
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(
+                    ["auto-arcade", "--round-limit", "0"]
+                )
 
 
 if __name__ == "__main__":

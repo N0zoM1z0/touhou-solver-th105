@@ -1,6 +1,6 @@
 # Offline training and deployment contract
 
-This document defines how a future GPU trainer can improve the TH105 agent
+This document defines how a multi-core CPU trainer can improve the TH105 agent
 without moving expensive or opaque inference into the live game loop. The
 native legality, resource, geometry, and finite-horizon hazard checks remain the
 authority. A learned model only ranks candidates that those checks permit.
@@ -69,19 +69,30 @@ by retaining every terminal, damage, rare-action, and high-tail-loss transition
 while using stratified reservoir sampling for repetitive neutral states. This
 preserves unusual failures without storing hours of identical idle frames.
 
-## Training progression
+## CPU-first training progression
 
-The first GPU baseline should be deliberately modest:
+The first baseline is deliberately tabular and CPU-native:
 
 1. Reproduce the online contextual-bandit ranking from held-out data. This
    validates feature extraction and reward reconstruction.
-2. Train separate offense and defense value heads with a shared small encoder.
-   Discrete-action IQL or conservative Q-learning is a suitable starting point;
-   behavior-cloning regularization prevents unsupported action extrapolation.
-3. Train several seeds or bootstrap heads. Their disagreement is deployed as
-   uncertainty, not averaged away during evaluation.
-4. Distill the best ensemble into a small int8 MLP, tree ensemble, or lookup
-   table. A large training model is not automatically the best runtime model.
+2. Train separate categorical histogram-tree heads for damage, self-damage,
+   downside quantiles, spirit cost, punish probability, and terminal credit.
+   Keep these outcomes separate so reward changes do not require recollection.
+3. When sequential action coverage is adequate, compare conservative fitted-Q
+   iteration with boosted trees. Penalize actions outside observed support;
+   deterministic rows with unknown legal sets cannot justify counterfactual
+   off-policy claims.
+4. Train several time/opponent folds or bootstrap heads. Their disagreement is
+   deployed as uncertainty, not averaged away during evaluation.
+5. Distill the best CPU ensemble into a bounded lookup table or compiled tree
+   scorer. A larger training model is not automatically a better runtime model.
+
+`scripts/train_th105_cpu.py` implements the multi-head boosted-tree baseline and
+distills an algorithm-neutral `distilled_policy.json`. Its categorical action,
+opponent, and difficulty features avoid lossy integer IDs. Complete episodes are
+held out chronologically, never split into adjacent random rows. Independent
+heads can be trained concurrently across a many-core server; each individual
+head may use fewer threads if memory bandwidth becomes the bottleneck.
 
 Separate heads prevent abundant guard samples from drowning sparse combo and
 skill evidence. The engine's tactical gate selects defense, offense, or neutral;
@@ -90,22 +101,26 @@ gate, but only after it can beat the native gate in held-out and live tests.
 
 ## Runtime artifact
 
-GPU training produces a self-contained directory, not a replacement corpus:
+CPU training produces a self-contained directory, not a replacement corpus:
 
 ```text
 policy-th105-sakuya-0007/
   manifest.json
-  scorer.int8.onnx
-  feature_schema.json
-  action_schema.json
-  calibration.json
-  evaluation.json
+  distilled_policy.json
+  models/
+    damage_bp.cbm
+    self_damage_bp.cbm
+    self_damage_p90_bp.cbm
+    spirit_cost_bp.cbm
+    punished_probability.cbm
+    terminal_value.cbm
 ```
 
 `manifest.json` records artifact/schema/reward versions, exact game build,
 training-corpus manifest hashes, supported characters/difficulties, model SHA,
-input/output tensor names, and required native-safety ABI. The scorer returns
-per-action expected utility, downside/tail estimate, and uncertainty. Online
+feature order, categorical features, per-head hashes/metrics, and required
+native-safety ABI. The scorer returns per-action expected outcomes,
+downside/tail estimate, and uncertainty. Online
 selection uses a risk-adjusted score such as
 
 ```text
@@ -114,8 +129,23 @@ expected utility - risk_weight * downside - uncertainty_weight * disagreement
 
 and falls back to the current table learner when the state is out of
 distribution, the artifact is incompatible, inference exceeds its deadline, or
-all scored actions fail the native gate. ONNX Runtime is a convenient first
-backend; a tree/lookup artifact should use the same manifest and output contract.
+all scored actions fail the native gate. The distilled table is the first
+deployment backend; a future compiled native-tree backend must use the same
+manifest and output contract and remain CPU-only.
+
+## Session export and Hub layout
+
+`scripts/export_th105_session.py` extracts one controller `session_id` across
+the bounded current JSONL and gzip rotations, deduplicates transition IDs, and
+emits deterministic gzip files. It exports sanitized terminal summaries rather
+than raw live telemetry, which deliberately excludes plugin paths and large
+frame snapshots. Baseline/final model files, game/policy/schema hashes, reward
+weights, action coverage, and privacy assertions are recorded in `manifest.json`.
+
+The portable dataset directory can be uploaded unchanged to a Hugging Face
+dataset repository. The repository starts private until the sensitive-fragment
+scan, schema validation, and artifact checks pass. Credentials remain in the
+user-level Hub credential store and are never part of the export.
 
 ## Evaluation protocol
 
