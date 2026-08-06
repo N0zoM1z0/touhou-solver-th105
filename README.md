@@ -70,6 +70,60 @@ it rotates at a fixed size and keeps only a few compressed diagnostic windows.
 The durable data tiers and forward-compatibility contract are specified in
 [`notes/CORPUS_SCHEMA.md`](notes/CORPUS_SCHEMA.md).
 
+## Private offline artifacts
+
+Training data and derived policies are intentionally stored outside this source
+repository. Access requires a Hugging Face token with permission to both private
+repositories.
+
+| Content | Repository | Verified revision |
+| --- | --- | --- |
+| Lunatic30 transition corpus | [`Joh1rreq/touhou-solver-th105-corpus`](https://huggingface.co/datasets/Joh1rreq/touhou-solver-th105-corpus) | `fbd13cb9c900c81d3623a9c7ac515896e2f00800` |
+| Four trained policy bundles | [`Joh1rreq/touhou-solver-th105-policy-zoo`](https://huggingface.co/Joh1rreq/touhou-solver-th105-policy-zoo) | `ccc35480bfe2c73437b5a9c114c4911dcd80101d` |
+
+After cloning or pulling this repository on a training machine, install the Hub
+client, authenticate, and download immutable snapshots:
+
+```bash
+python -m pip install -r requirements-cpu-train-zoo.txt
+hf auth login
+
+hf download Joh1rreq/touhou-solver-th105-corpus \
+  --repo-type dataset \
+  --revision fbd13cb9c900c81d3623a9c7ac515896e2f00800 \
+  --local-dir dataset-lunatic30
+
+hf download Joh1rreq/touhou-solver-th105-policy-zoo \
+  --revision ccc35480bfe2c73437b5a9c114c4911dcd80101d \
+  --include 'lunatic30/**' \
+  --local-dir policy-zoo
+```
+
+The dataset then lives at
+`dataset-lunatic30/data/transitions.jsonl.gz`. The model snapshot contains the
+following runtime-compatible candidates:
+
+```text
+policy-zoo/lunatic30/catboost-baseline/
+policy-zoo/lunatic30/catboost-ensemble5/
+policy-zoo/lunatic30/xgboost-hist/
+policy-zoo/lunatic30/extra-trees/
+policy-zoo/lunatic30/comparison.json
+```
+
+For example, validate and install the ExtraTrees candidate with:
+
+```bash
+python scripts/install_th105_offline_policy.py \
+  --bundle policy-zoo/lunatic30/extra-trees
+```
+
+This writes the distilled runtime policy and its manifest under `runtime/`; it
+does not install the corpus or the training-library models into the live loop. The
+complete provenance, held-out comparison, artifact hashes, and recommended
+physical test order are recorded in
+[`notes/TRAINING_LUNATIC30_POLICY_ZOO_20260806.md`](notes/TRAINING_LUNATIC30_POLICY_ZOO_20260806.md).
+
 ## Running
 
 The controller runs under Windows Python because it uses Win32 process and input
@@ -169,8 +223,8 @@ first multi-head outcome model with:
 
 ```bash
 python scripts/train_th105_cpu.py \
-  --input dataset/data/transitions.jsonl.gz \
-  --corpus-manifest dataset/manifest.json --output policy-lunatic30 \
+  --input dataset-lunatic30/data/transitions.jsonl.gz \
+  --corpus-manifest dataset-lunatic30/manifest.json --output policy-lunatic30 \
   --threads 96
 ```
 
@@ -193,18 +247,18 @@ chronological complete-episode split:
 pip install -r requirements-cpu-train-zoo.txt
 
 python scripts/train_th105_zoo.py --algorithm catboost-ensemble \
-  --input dataset/data/transitions.jsonl.gz \
-  --corpus-manifest dataset/manifest.json --output policy-catboost-ensemble \
+  --input dataset-lunatic30/data/transitions.jsonl.gz \
+  --corpus-manifest dataset-lunatic30/manifest.json --output policy-catboost-ensemble \
   --threads 32 --iterations 900 --depth 8 --members 5
 
 python scripts/train_th105_zoo.py --algorithm xgboost \
-  --input dataset/data/transitions.jsonl.gz \
-  --corpus-manifest dataset/manifest.json --output policy-xgboost \
+  --input dataset-lunatic30/data/transitions.jsonl.gz \
+  --corpus-manifest dataset-lunatic30/manifest.json --output policy-xgboost \
   --threads 32 --iterations 1200 --depth 8
 
 python scripts/train_th105_zoo.py --algorithm extra-trees \
-  --input dataset/data/transitions.jsonl.gz \
-  --corpus-manifest dataset/manifest.json --output policy-extra-trees \
+  --input dataset-lunatic30/data/transitions.jsonl.gz \
+  --corpus-manifest dataset-lunatic30/manifest.json --output policy-extra-trees \
   --threads 32 --trees 512 --depth 18
 
 python scripts/compare_th105_policy_bundles.py \
