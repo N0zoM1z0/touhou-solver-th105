@@ -125,16 +125,16 @@ class BootstrapBattleTests(unittest.TestCase):
 
     def test_pending_rotation_alternates_dialogue_confirm_and_result_back(self) -> None:
         self.assertEqual(
-            round_end_confirm_keys(0, rotation_requested=True), {"z"}
+            round_end_confirm_keys(0, rotation_requested=True), {"x"}
         )
         self.assertEqual(
-            round_end_confirm_keys(30, rotation_requested=True), {"x"}
+            round_end_confirm_keys(30, rotation_requested=True), {"z"}
         )
         self.assertEqual(
-            round_end_confirm_keys(60, rotation_requested=True), {"z"}
+            round_end_confirm_keys(60, rotation_requested=True), {"x"}
         )
         self.assertEqual(
-            round_end_confirm_keys(90, rotation_requested=True), {"x"}
+            round_end_confirm_keys(90, rotation_requested=True), {"z"}
         )
 
 

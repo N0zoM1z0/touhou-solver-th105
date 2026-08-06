@@ -159,14 +159,16 @@ def round_end_confirm_keys(
     """Advance Arena dialogue, then leave its result screen when rotating.
 
     Scene 5 remains active for both states: dialogue accepts Z while the final
-    result accepts X.  Alternating sparse edges is safe because an intermediate
-    X is ignored by dialogue, while an intermediate-round HP reset immediately
-    returns control to the combat policy before the next edge is emitted.
+    result accepts X.  When rotating, cancel comes first so a victory result
+    cannot consume Z and immediately continue to another opponent. Dialogue
+    ignores that X, accepts the following Z, then the next X leaves its result.
     """
     if round_end_frames % 30:
         return set()
-    if rotation_requested and round_end_frames % 60 == 30:
+    if rotation_requested and round_end_frames % 60 == 0:
         return {"x"}
+    if rotation_requested and round_end_frames % 60 == 30:
+        return {"z"}
     return {"z"}
 
 
