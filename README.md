@@ -148,9 +148,14 @@ after N native terminal rounds; the reported actual count can exceed N by at
 most the remainder of the current match.
 Learned observations are stored under separate opponent-and-difficulty keys. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
-background while another window has focus. Pass `--foreground-only` to restore
-strict foreground ownership. Round-end and Arcade dialogue screens receive
-sparse Z edges so the campaign can continue.
+background while another window has focus. Background mode is strict from
+process creation onward: Windows is asked to show TH105 without activation,
+the controller never calls `SetForegroundWindow`, and it fails closed before
+publishing input if TH105 unexpectedly becomes foreground. This permits a
+separate process-local TH06 cave/controller to keep running without shared
+keyboard events or focus theft. Pass `--foreground-only` only when explicit
+TH105 focus/reacquisition is desired. Round-end and Arcade dialogue screens
+receive sparse process-local Z edges so the campaign can continue.
 
 For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
 `auto-arcade --launch --p1-character sakuya --difficulty cycle

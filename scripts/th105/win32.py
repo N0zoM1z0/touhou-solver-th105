@@ -19,6 +19,8 @@ SYNCHRONIZE = 0x00100000
 INFINITE = 0xFFFFFFFF
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 SW_RESTORE = 9
+SW_SHOWNOACTIVATE = 4
+STARTF_USESHOWWINDOW = 0x00000001
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -160,18 +162,31 @@ class Win32:
         k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         k.OpenProcess.restype = wintypes.HANDLE
         k.ReadProcessMemory.argtypes = [
-            wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID,
-            ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+            wintypes.HANDLE,
+            wintypes.LPCVOID,
+            wintypes.LPVOID,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
         ]
         k.ReadProcessMemory.restype = wintypes.BOOL
         k.QueryFullProcessImageNameW.argtypes = [
-            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
         ]
         k.QueryFullProcessImageNameW.restype = wintypes.BOOL
         k.CreateProcessW.argtypes = [
-            wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.LPVOID, wintypes.LPVOID,
-            wintypes.BOOL, wintypes.DWORD, wintypes.LPVOID, wintypes.LPCWSTR,
-            ctypes.POINTER(STARTUPINFOW), ctypes.POINTER(PROCESS_INFORMATION),
+            wintypes.LPCWSTR,
+            wintypes.LPWSTR,
+            wintypes.LPVOID,
+            wintypes.LPVOID,
+            wintypes.BOOL,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.LPCWSTR,
+            ctypes.POINTER(STARTUPINFOW),
+            ctypes.POINTER(PROCESS_INFORMATION),
         ]
         k.CreateProcessW.restype = wintypes.BOOL
         k.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -182,7 +197,8 @@ class Win32:
         u.GetAsyncKeyState.argtypes = [ctypes.c_int]
         u.GetAsyncKeyState.restype = ctypes.c_short
         u.GetWindowThreadProcessId.argtypes = [
-            wintypes.HWND, ctypes.POINTER(wintypes.DWORD)
+            wintypes.HWND,
+            ctypes.POINTER(wintypes.DWORD),
         ]
         u.GetWindowThreadProcessId.restype = wintypes.DWORD
         u.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
@@ -203,7 +219,9 @@ class Win32:
 
         expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
         if ctypes.sizeof(INPUT) != expected:
-            raise RuntimeError(f"unexpected INPUT size {ctypes.sizeof(INPUT)} (expected {expected})")
+            raise RuntimeError(
+                f"unexpected INPUT size {ctypes.sizeof(INPUT)} (expected {expected})"
+            )
 
     def find_pids(self, exe_name: str = TARGET_EXE) -> tuple[int, ...]:
         snapshot = self.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
@@ -292,14 +310,28 @@ class Win32:
             time.sleep(0.1)
         raise RuntimeError(f"could not focus PID {pid}; visible windows={last}")
 
-    def launch(self, exe_path: Path) -> int:
+    def launch(self, exe_path: Path, *, activate: bool = True) -> int:
         exe_path = exe_path.resolve()
         startup = STARTUPINFOW()
         startup.cb = ctypes.sizeof(startup)
+        if not activate:
+            # Show the GUI without granting it foreground ownership.  This is
+            # required when another process-local Touhou controller is already
+            # running and must not lose timing/focus authority.
+            startup.dwFlags |= STARTF_USESHOWWINDOW
+            startup.wShowWindow = SW_SHOWNOACTIVATE
         info = PROCESS_INFORMATION()
         if not self.kernel32.CreateProcessW(
-            str(exe_path), None, None, None, False, 0, None,
-            str(exe_path.parent), ctypes.byref(startup), ctypes.byref(info)
+            str(exe_path),
+            None,
+            None,
+            None,
+            False,
+            0,
+            None,
+            str(exe_path.parent),
+            ctypes.byref(startup),
+            ctypes.byref(info),
         ):
             raise _win_error("CreateProcessW")
         try:
@@ -371,7 +403,9 @@ class ProcessReader:
         self.close()
 
 
-def verify_reader(reader: ProcessReader, expected_path: Path | None = None) -> dict[str, object]:
+def verify_reader(
+    reader: ProcessReader, expected_path: Path | None = None
+) -> dict[str, object]:
     path = reader.image_path().resolve()
     digest = sha256(path)
     if path.name.casefold() != TARGET_EXE or digest != EXPECTED_EXE_SHA256:
@@ -379,7 +413,9 @@ def verify_reader(reader: ProcessReader, expected_path: Path | None = None) -> d
     if expected_path is not None and os.path.normcase(str(path)) != os.path.normcase(
         str(expected_path.resolve())
     ):
-        raise RuntimeError(f"target path mismatch: running={path}, expected={expected_path}")
+        raise RuntimeError(
+            f"target path mismatch: running={path}, expected={expected_path}"
+        )
     if reader.read(0x00400000, 2) != b"MZ":
         raise RuntimeError("expected PE header is absent at 0x00400000")
     return {"pid": reader.pid, "path": str(path), "sha256": digest}
@@ -400,7 +436,9 @@ def find_exact_target(api: Win32, expected_path: Path) -> tuple[int, dict[str, o
     return matches[0]
 
 
-def wait_exact_target(api: Win32, expected_path: Path, pid: int, timeout: float) -> dict[str, object]:
+def wait_exact_target(
+    api: Win32, expected_path: Path, pid: int, timeout: float
+) -> dict[str, object]:
     deadline = time.perf_counter() + timeout
     last_error: Exception | None = None
     while time.perf_counter() < deadline:

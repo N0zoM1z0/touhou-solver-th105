@@ -51,23 +51,23 @@ def jump_target(source: int, instruction: bytes) -> int:
 def build_stub(cave: int) -> bytes:
     control = cave + CONTROL_OFFSET
     code = bytearray()
-    code += b"\x9C\x50\x51\x52\x53"  # pushfd, eax, ecx, edx, ebx
-    code += b"\xB9" + struct.pack("<I", control)  # mov ecx, control
-    code += b"\xBA" + struct.pack("<I", ADDR_RAW_KEYBOARD)  # mov edx, raw
-    code += b"\xB8\x00\x01\x00\x00"  # mov eax, 256
+    code += b"\x9c\x50\x51\x52\x53"  # pushfd, eax, ecx, edx, ebx
+    code += b"\xb9" + struct.pack("<I", control)  # mov ecx, control
+    code += b"\xba" + struct.pack("<I", ADDR_RAW_KEYBOARD)  # mov edx, raw
+    code += b"\xb8\x00\x01\x00\x00"  # mov eax, 256
     loop = len(code)
-    code += b"\x8A\x19"  # mov bl, [ecx]
-    code += b"\x08\x1A"  # or [edx], bl
+    code += b"\x8a\x19"  # mov bl, [ecx]
+    code += b"\x08\x1a"  # or [edx], bl
     code += b"\x41\x42\x48"  # inc ecx; inc edx; dec eax
     branch_end = len(code) + 2
     displacement = loop - branch_end
     if not -128 <= displacement <= 127:
         raise AssertionError("overlay loop no longer fits a short branch")
     code += b"\x75" + struct.pack("b", displacement)
-    code += b"\x5B\x5A\x59\x58\x9D"  # pop ebx, edx, ecx, eax, popfd
+    code += b"\x5b\x5a\x59\x58\x9d"  # pop ebx, edx, ecx, eax, popfd
     code += HOOK_ORIGINAL
     jump_address = cave + len(code)
-    code += b"\xE9" + rel32(jump_address, HOOK_ADDRESS + len(HOOK_ORIGINAL))
+    code += b"\xe9" + rel32(jump_address, HOOK_ADDRESS + len(HOOK_ORIGINAL))
     return bytes(code)
 
 
@@ -84,29 +84,46 @@ class InjectedInputBridge:
     def _configure_api(self) -> None:
         k = self.api.kernel32
         k.WriteProcessMemory.argtypes = [
-            wintypes.HANDLE, wintypes.LPVOID, wintypes.LPCVOID,
-            ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.LPCVOID,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
         ]
         k.WriteProcessMemory.restype = wintypes.BOOL
         k.VirtualAllocEx.argtypes = [
-            wintypes.HANDLE, wintypes.LPVOID, ctypes.c_size_t,
-            wintypes.DWORD, wintypes.DWORD,
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            ctypes.c_size_t,
+            wintypes.DWORD,
+            wintypes.DWORD,
         ]
         k.VirtualAllocEx.restype = wintypes.LPVOID
         k.VirtualFreeEx.argtypes = [
-            wintypes.HANDLE, wintypes.LPVOID, ctypes.c_size_t, wintypes.DWORD
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            ctypes.c_size_t,
+            wintypes.DWORD,
         ]
         k.VirtualFreeEx.restype = wintypes.BOOL
         k.VirtualProtectEx.argtypes = [
-            wintypes.HANDLE, wintypes.LPVOID, ctypes.c_size_t,
-            wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            ctypes.c_size_t,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
         ]
         k.VirtualProtectEx.restype = wintypes.BOOL
         k.FlushInstructionCache.argtypes = [
-            wintypes.HANDLE, wintypes.LPCVOID, ctypes.c_size_t
+            wintypes.HANDLE,
+            wintypes.LPCVOID,
+            ctypes.c_size_t,
         ]
         k.FlushInstructionCache.restype = wintypes.BOOL
-        k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
         k.GetExitCodeProcess.restype = wintypes.BOOL
         self.ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
         self.ntdll.NtSuspendProcess.argtypes = [wintypes.HANDLE]
@@ -130,15 +147,22 @@ class InjectedInputBridge:
         written = ctypes.c_size_t()
         buffer = ctypes.create_string_buffer(data)
         if not self.api.kernel32.WriteProcessMemory(
-            self.handle, ctypes.c_void_p(address), buffer, len(data), ctypes.byref(written)
+            self.handle,
+            ctypes.c_void_p(address),
+            buffer,
+            len(data),
+            ctypes.byref(written),
         ) or written.value != len(data):
             raise _win_error(f"WriteProcessMemory({address:#x}, {len(data)})")
 
     def _write_code(self, address: int, data: bytes) -> None:
         old = wintypes.DWORD()
         if not self.api.kernel32.VirtualProtectEx(
-            self.handle, ctypes.c_void_p(address), len(data),
-            PAGE_EXECUTE_READWRITE, ctypes.byref(old)
+            self.handle,
+            ctypes.c_void_p(address),
+            len(data),
+            PAGE_EXECUTE_READWRITE,
+            ctypes.byref(old),
         ):
             raise _win_error("VirtualProtectEx")
         try:
@@ -146,8 +170,11 @@ class InjectedInputBridge:
         finally:
             restored = wintypes.DWORD()
             if not self.api.kernel32.VirtualProtectEx(
-                self.handle, ctypes.c_void_p(address), len(data),
-                old.value, ctypes.byref(restored)
+                self.handle,
+                ctypes.c_void_p(address),
+                len(data),
+                old.value,
+                ctypes.byref(restored),
             ):
                 raise _win_error("VirtualProtectEx restore")
         if not self.api.kernel32.FlushInstructionCache(
@@ -172,7 +199,9 @@ class InjectedInputBridge:
         if actual != HOOK_ORIGINAL:
             self._recover_verified_orphan(actual)
         access = (
-            PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION
+            PROCESS_VM_READ
+            | PROCESS_VM_WRITE
+            | PROCESS_VM_OPERATION
             | PROCESS_SUSPEND_RESUME
             | PROCESS_QUERY_LIMITED_INFORMATION
         )
@@ -181,8 +210,11 @@ class InjectedInputBridge:
             raise _win_error("OpenProcess(input bridge)")
         try:
             allocation = self.api.kernel32.VirtualAllocEx(
-                self.handle, None, CAVE_SIZE,
-                MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
+                self.handle,
+                None,
+                CAVE_SIZE,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE,
             )
             if not allocation:
                 raise _win_error("VirtualAllocEx(input bridge)")
@@ -190,7 +222,7 @@ class InjectedInputBridge:
             self.control = self.cave + CONTROL_OFFSET
             self._write(self.cave, build_stub(self.cave))
             self._write(self.control, bytes(256))
-            hook = b"\xE9" + rel32(HOOK_ADDRESS, self.cave)
+            hook = b"\xe9" + rel32(HOOK_ADDRESS, self.cave)
             with self._suspended():
                 if self.reader.read(HOOK_ADDRESS, len(HOOK_ORIGINAL)) != HOOK_ORIGINAL:
                     raise RuntimeError("input hook site changed before publication")
@@ -201,7 +233,7 @@ class InjectedInputBridge:
         except Exception:
             if self.handle and self.cave:
                 current = self.reader.read(HOOK_ADDRESS, len(HOOK_ORIGINAL))
-                if current[:1] == b"\xE9":
+                if current[:1] == b"\xe9":
                     with self._suspended():
                         self._write_code(HOOK_ADDRESS, HOOK_ORIGINAL)
             self._discard_allocation()
@@ -224,7 +256,9 @@ class InjectedInputBridge:
                 f"refusing unknown hook target {cave:#x} at {HOOK_ADDRESS:#x}"
             )
         access = (
-            PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION
+            PROCESS_VM_READ
+            | PROCESS_VM_WRITE
+            | PROCESS_VM_OPERATION
             | PROCESS_SUSPEND_RESUME
             | PROCESS_QUERY_LIMITED_INFORMATION
         )
@@ -275,7 +309,10 @@ class InjectedInputBridge:
             if self.installed and self._process_alive():
                 with self._suspended():
                     self._write_code(HOOK_ADDRESS, HOOK_ORIGINAL)
-                    if self.reader.read(HOOK_ADDRESS, len(HOOK_ORIGINAL)) != HOOK_ORIGINAL:
+                    if (
+                        self.reader.read(HOOK_ADDRESS, len(HOOK_ORIGINAL))
+                        != HOOK_ORIGINAL
+                    ):
                         raise RuntimeError("input hook restoration verification failed")
                 self.installed = False
                 # Let any thread already inside the tiny stub retire before free.
@@ -303,16 +340,23 @@ class InjectedKeyboard:
         bridge: InjectedInputBridge,
         *,
         foreground_required: bool = True,
+        foreground_forbidden: bool = False,
     ) -> None:
+        if foreground_required and foreground_forbidden:
+            raise ValueError("foreground cannot be both required and forbidden")
         self.api = api
         self.pid = pid
         self.bridge = bridge
         self.foreground_required = foreground_required
+        self.foreground_forbidden = foreground_forbidden
         self.held: set[str] = set()
 
     def require_foreground(self) -> None:
-        if self.foreground_required and self.api.foreground_pid() != self.pid:
+        foreground_pid = self.api.foreground_pid()
+        if self.foreground_required and foreground_pid != self.pid:
             raise RuntimeError("TH105 lost foreground ownership")
+        if self.foreground_forbidden and foreground_pid == self.pid:
+            raise RuntimeError("TH105 background-only foreground violation")
 
     def set_chord(self, names: set[str]) -> None:
         self.require_foreground()

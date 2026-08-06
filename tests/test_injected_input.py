@@ -28,7 +28,7 @@ class InjectedInputAssemblyTests(unittest.TestCase):
     def test_near_jump_target_round_trip(self) -> None:
         source = 0x00408218
         target = 0x12345000
-        self.assertEqual(jump_target(source, b"\xE9" + rel32(source, target)), target)
+        self.assertEqual(jump_target(source, b"\xe9" + rel32(source, target)), target)
 
     def test_stub_embeds_control_and_restores_original_instruction(self) -> None:
         cave = 0x10000000
@@ -53,16 +53,46 @@ class InjectedInputAssemblyTests(unittest.TestCase):
 
         bridge = Bridge()
         keyboard = InjectedKeyboard(
-            Api(), 123, bridge, foreground_required=False  # type: ignore[arg-type]
+            Api(),
+            123,
+            bridge,
+            foreground_required=False,  # type: ignore[arg-type]
         )
         keyboard.set_chord({"z"})
         self.assertEqual(bridge.keys, {"z"})
 
         foreground_keyboard = InjectedKeyboard(
-            Api(), 123, bridge, foreground_required=True  # type: ignore[arg-type]
+            Api(),
+            123,
+            bridge,
+            foreground_required=True,  # type: ignore[arg-type]
         )
         with self.assertRaisesRegex(RuntimeError, "lost foreground"):
             foreground_keyboard.set_chord({"z"})
+
+    def test_background_only_keyboard_refuses_foreground_intrusion(self) -> None:
+        class Api:
+            @staticmethod
+            def foreground_pid() -> int:
+                return 123
+
+        class Bridge:
+            calls = 0
+
+            def set_keys(self, _names: set[str]) -> None:
+                self.calls += 1
+
+        bridge = Bridge()
+        keyboard = InjectedKeyboard(
+            Api(),
+            123,
+            bridge,  # type: ignore[arg-type]
+            foreground_required=False,
+            foreground_forbidden=True,
+        )
+        with self.assertRaisesRegex(RuntimeError, "background-only"):
+            keyboard.set_chord({"z"})
+        self.assertEqual(bridge.calls, 0)
 
 
 if __name__ == "__main__":

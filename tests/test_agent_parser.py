@@ -12,6 +12,10 @@ from th105.agent import build_parser
 
 
 class AgentParserTests(unittest.TestCase):
+    def test_auto_arcade_is_strict_background_by_default(self) -> None:
+        args = build_parser().parse_args(["auto-arcade"])
+        self.assertFalse(args.foreground_only)
+
     def test_cycle_uses_weighted_default_quotas(self) -> None:
         args = build_parser().parse_args(
             ["auto-arcade", "--difficulty", "cycle", "--continuous"]
@@ -59,9 +63,7 @@ class AgentParserTests(unittest.TestCase):
     def test_round_limit_rejects_zero(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
-                build_parser().parse_args(
-                    ["auto-arcade", "--round-limit", "0"]
-                )
+                build_parser().parse_args(["auto-arcade", "--round-limit", "0"])
 
 
 if __name__ == "__main__":

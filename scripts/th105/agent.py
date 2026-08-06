@@ -53,7 +53,13 @@ from .menu import (
     reach_main_menu,
     scene_id,
 )
-from .win32 import ProcessReader, Win32, find_exact_target, verify_reader, wait_exact_target
+from .win32 import (
+    ProcessReader,
+    Win32,
+    find_exact_target,
+    verify_reader,
+    wait_exact_target,
+)
 
 
 def target_path(game_dir: Path) -> Path:
@@ -95,12 +101,18 @@ def open_target(api: Win32, game_dir: Path) -> tuple[ProcessReader, dict[str, ob
     return reader, identity
 
 
-def launch_target(api: Win32, game_dir: Path, timeout: float) -> tuple[int, dict[str, object]]:
+def launch_target(
+    api: Win32,
+    game_dir: Path,
+    timeout: float,
+    *,
+    activate: bool = True,
+) -> tuple[int, dict[str, object]]:
     exe = target_path(game_dir)
     if api.find_pids(TARGET_EXE):
         pid, identity = find_exact_target(api, exe)
         return pid, identity
-    pid = api.launch(exe)
+    pid = api.launch(exe, activate=activate)
     return pid, wait_exact_target(api, exe, pid, timeout)
 
 
@@ -163,17 +175,23 @@ def probe(args: argparse.Namespace) -> int:
                 main_menu_selection(reader) if scene_id(reader) == 2 else None
             ),
             "raw_keyboard_pressed": [
-                name for name, key in KEYS.items()
+                name
+                for name, key in KEYS.items()
                 if reader.read(ADDR_RAW_KEYBOARD + key.dik_code, 1)[0] & 0x80
             ],
             "async_keyboard_pressed": [
-                name for name, virtual_key in VIRTUAL_KEYS.items()
+                name
+                for name, virtual_key in VIRTUAL_KEYS.items()
                 if api.user32.GetAsyncKeyState(virtual_key) & 0x8000
             ],
             "p1_input": {
                 "device_index": reader.i8(ADDR_P1_INPUT + 4),
-                "bindings": [reader.u32(ADDR_P1_INPUT + offset) for offset in range(8, 56, 4)],
-                "counters": [reader.i32(ADDR_P1_INPUT + offset) for offset in range(56, 96, 4)],
+                "bindings": [
+                    reader.u32(ADDR_P1_INPUT + offset) for offset in range(8, 56, 4)
+                ],
+                "counters": [
+                    reader.i32(ADDR_P1_INPUT + offset) for offset in range(56, 96, 4)
+                ],
                 "logical_mask": reader.u16(ADDR_P1_INPUT + 98),
             },
             "menu_input": {
@@ -293,8 +311,7 @@ def learn_human(args: argparse.Namespace) -> int:
                 input_keys = frozenset(
                     name
                     for name in ("up", "down", "left", "right", "z", "x", "c", "a")
-                    if reader.read(ADDR_RAW_KEYBOARD + KEYS[name].dik_code, 1)[0]
-                    & 0x80
+                    if reader.read(ADDR_RAW_KEYBOARD + KEYS[name].dik_code, 1)[0] & 0x80
                 )
                 recorder.observe(frame, state, input_keys=input_keys)
                 last_state = state
@@ -449,7 +466,12 @@ def auto_arcade(args: argparse.Namespace) -> int:
     api = Win32()
     controller_session_id = uuid.uuid4().hex
     if args.launch:
-        pid, identity = launch_target(api, args.game_dir, args.timeout)
+        pid, identity = launch_target(
+            api,
+            args.game_dir,
+            args.timeout,
+            activate=args.foreground_only,
+        )
     else:
         pid, identity = find_exact_target(api, target_path(args.game_dir))
     reader = ProcessReader(api, pid)
@@ -462,10 +484,13 @@ def auto_arcade(args: argparse.Namespace) -> int:
             pid,
             bridge,
             foreground_required=args.foreground_only,
+            foreground_forbidden=not args.foreground_only,
         )
         verify_reader(reader, target_path(args.game_dir))
-        api.focus(pid, args.timeout)
-        keyboard.release_all(require_foreground=True)
+        if args.foreground_only:
+            api.focus(pid, args.timeout)
+        keyboard.require_foreground()
+        keyboard.release_all(require_foreground=args.foreground_only)
         curriculum = DifficultyCurriculum(cpu_difficulty(reader))
         fixed_cycle = FixedRoundDifficultyCycle(
             cpu_difficulty(reader),
@@ -526,9 +551,16 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     verify_reader(reader, target_path(args.game_dir))
                     api.focus(pid, args.timeout)
                     transitions.append(
-                        {"from": last_scene, "to": last_scene, "event": "focus-reacquired"}
+                        {
+                            "from": last_scene,
+                            "to": last_scene,
+                            "event": "focus-reacquired",
+                        }
                     )
                     continue
+                if not args.foreground_only and api.foreground_pid() == pid:
+                    keyboard.release_all()
+                    raise RuntimeError("TH105 background-only foreground violation")
                 current = scene_id(reader)
                 if current != last_scene:
                     transitions.append({"from": last_scene, "to": current})
@@ -568,7 +600,8 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 exploration_rate=args.exploration_rate,
                                 transition_opponent_filter=(
                                     f"0x{CHARACTER_VTABLES[args.collect_opponent]:08X}"
-                                    if args.collect_opponent else None
+                                    if args.collect_opponent
+                                    else None
                                 ),
                                 persist_online=not args.freeze_online_checkpoint,
                             )
@@ -580,6 +613,8 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 frame_hz=args.frame_hz,
                             )
                     except (OSError, RuntimeError) as exc:
+                        if "background-only foreground violation" in str(exc):
+                            raise
                         if not (
                             isinstance(exc, RuntimeError)
                             and "lost foreground ownership" in str(exc)
@@ -590,14 +625,22 @@ def auto_arcade(args: argparse.Namespace) -> int:
                             # reacquires freshly allocated fighters.
                             keyboard.tap("z", hold_ms=35, gap_ms=350)
                             transitions.append(
-                                {"from": current, "to": current, "event": "dialogue-confirm"}
+                                {
+                                    "from": current,
+                                    "to": current,
+                                    "event": "dialogue-confirm",
+                                }
                             )
                             continue
                         keyboard.release_all()
                         verify_reader(reader, target_path(args.game_dir))
                         api.focus(pid, args.timeout)
                         transitions.append(
-                            {"from": current, "to": current, "event": "focus-reacquired"}
+                            {
+                                "from": current,
+                                "to": current,
+                                "event": "focus-reacquired",
+                            }
                         )
                         continue
                     encounters.append(dict(encounter))
@@ -685,9 +728,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     # fixed, adaptive, or cyclic difficulty.
                     requested_difficulty = choose_campaign_difficulty()
                     history.extend(
-                        configure_cpu_difficulty(
-                            reader, keyboard, requested_difficulty
-                        )
+                        configure_cpu_difficulty(reader, keyboard, requested_difficulty)
                     )
                     active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
                     transitions.append(
@@ -751,18 +792,24 @@ def auto_arcade(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="TH105 exact-target physical controller")
+    parser = argparse.ArgumentParser(
+        description="TH105 exact-target physical controller"
+    )
     parser.add_argument("--game-dir", type=Path, default=configured_game_dir())
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("probe", help="read exact target identity and native scene")
     p.set_defaults(func=probe)
 
-    p = sub.add_parser("trace-actions", help="read-only action/pose/frame transition trace")
+    p = sub.add_parser(
+        "trace-actions", help="read-only action/pose/frame transition trace"
+    )
     p.add_argument("--seconds", type=float, default=5.0)
     p.add_argument("--sample-hz", type=float, default=120.0)
     p.add_argument("--max-events", type=int, default=2000)
-    p.add_argument("--coarse", action="store_true", help="record action/HP/command changes only")
+    p.add_argument(
+        "--coarse", action="store_true", help="record action/HP/command changes only"
+    )
     p.set_defaults(func=trace_actions)
 
     p = sub.add_parser(
@@ -799,7 +846,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("release", help="release every supported injected key")
     p.set_defaults(func=release)
 
-    p = sub.add_parser("combo", help="play frame-timed chord steps through the input bridge")
+    p = sub.add_parser(
+        "combo", help="play frame-timed chord steps through the input bridge"
+    )
     p.add_argument("steps", help="for example right@6,right+z@3,neutral@8")
     p.add_argument("--frame-hz", type=float, default=60.0)
     p.set_defaults(func=combo)
@@ -883,7 +932,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--foreground-only",
         action="store_true",
-        help="pause/reacquire unless TH105 owns the foreground (background is default)",
+        help=(
+            "explicitly focus/reacquire TH105; by default launch without "
+            "activation and fail closed if TH105 ever takes foreground"
+        ),
     )
     p.add_argument(
         "--exploration-rate",
