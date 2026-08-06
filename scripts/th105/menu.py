@@ -238,11 +238,9 @@ def select_p1_character(
             return history
         current_row, current_column = divmod(current, 4)
         target_row, target_column = divmod(target, 4)
-        # Align the column first.  The shipped roster may contain locked cells,
-        # so a vertical move through an unavailable intermediate character can
-        # be rejected even when the target in the same row is available.  For
-        # example, Patchouli is reliably reached as Reimu -> Marisa ->
-        # Patchouli (right x3, down), not through Alice (down, right x3).
+        # Align the column first to mirror the native grid interaction.  In
+        # particular, Patchouli is reached as Reimu -> Marisa -> Patchouli
+        # (right x3, down), not through Alice (down, right x3).
         if current_column != target_column:
             key = "right" if target_column > current_column else "left"
             expected = current + (1 if key == "right" else -1)
@@ -257,7 +255,10 @@ def select_p1_character(
                 expected = next_row * 4 + current_column
         else:
             raise AssertionError("character cursor is neither at nor away from target")
-        keyboard.tap(key, hold_ms=70, gap_ms=260)
+        # Character portraits animate between cells.  A fast axis change can
+        # be acknowledged by the shared input counters but ignored by the
+        # selection controller, so leave a human-scale settle interval.
+        keyboard.tap(key, hold_ms=75, gap_ms=700)
         after = p1_character_selection(reader)
         history.append(
             {
@@ -270,7 +271,7 @@ def select_p1_character(
         if after != expected:
             raise RuntimeError(
                 f"character-select {key} moved {current}->{after}, expected {expected}; "
-                f"target character {character!r} may still be locked"
+                f"target character {character!r} navigation did not settle"
             )
     raise RuntimeError(f"failed to select {character} within one roster cycle")
 
