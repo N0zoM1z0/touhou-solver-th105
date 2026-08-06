@@ -238,7 +238,15 @@ def select_p1_character(
             return history
         current_row, current_column = divmod(current, 4)
         target_row, target_column = divmod(target, 4)
-        if current_row != target_row:
+        # Align the column first.  The shipped roster may contain locked cells,
+        # so a vertical move through an unavailable intermediate character can
+        # be rejected even when the target in the same row is available.  For
+        # example, Patchouli is reliably reached as Reimu -> Marisa ->
+        # Patchouli (right x3, down), not through Alice (down, right x3).
+        if current_column != target_column:
+            key = "right" if target_column > current_column else "left"
+            expected = current + (1 if key == "right" else -1)
+        elif current_row != target_row:
             next_row = current_row + (1 if target_row > current_row else -1)
             next_row_width = min(4, len(CHARACTER_CURSOR_SLOTS) - next_row * 4)
             if current_column >= next_row_width:
@@ -248,8 +256,7 @@ def select_p1_character(
                 key = "down" if next_row > current_row else "up"
                 expected = next_row * 4 + current_column
         else:
-            key = "right" if target_column > current_column else "left"
-            expected = current + (1 if key == "right" else -1)
+            raise AssertionError("character cursor is neither at nor away from target")
         keyboard.tap(key, hold_ms=70, gap_ms=260)
         after = p1_character_selection(reader)
         history.append(

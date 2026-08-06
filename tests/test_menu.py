@@ -154,7 +154,7 @@ class NativeContractTests(unittest.TestCase):
         ):
             history = select_p1_character(object(), keyboard, "patchouli")
         self.assertEqual(keyboard.slot, CHARACTER_CURSOR_SLOTS.index("patchouli"))
-        self.assertEqual(keyboard.taps, ["down", "right", "right", "right"])
+        self.assertEqual(keyboard.taps, ["right", "right", "right", "down"])
         self.assertEqual(history[-1]["character"], "patchouli")
 
     def test_reach_main_menu_exits_arcade_character_select_with_cancel(self) -> None:
