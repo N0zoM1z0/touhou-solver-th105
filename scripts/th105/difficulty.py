@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from .menu import DIFFICULTIES
 
+DEFAULT_CYCLE_ROUND_QUOTAS = (2, 4, 8, 10)
+
 
 def next_cyclic_difficulty(level: int) -> str:
     """Return the next fixed campaign level, wrapping Lunatic to Easy."""
@@ -20,20 +22,29 @@ class FixedRoundDifficultyCycle:
     """Rotate only after an exact number of native terminal rounds."""
 
     level: int
-    rounds_per_difficulty: int = 6
+    round_quotas: tuple[int, ...] = DEFAULT_CYCLE_ROUND_QUOTAS
     completed_rounds: int = 0
 
     def __post_init__(self) -> None:
         if not 0 <= self.level < len(DIFFICULTIES):
             raise ValueError(f"invalid initial difficulty level {self.level}")
-        if self.rounds_per_difficulty <= 0:
-            raise ValueError("rounds per difficulty must be positive")
+        if (
+            len(self.round_quotas) != len(DIFFICULTIES)
+            or any(quota <= 0 for quota in self.round_quotas)
+        ):
+            raise ValueError(
+                "difficulty round quotas must contain one positive value per level"
+            )
         if self.completed_rounds < 0:
             raise ValueError("completed rounds cannot be negative")
 
     @property
     def difficulty(self) -> str:
         return DIFFICULTIES[self.level]
+
+    @property
+    def rounds_per_difficulty(self) -> int:
+        return self.round_quotas[self.level]
 
     @property
     def rotation_due(self) -> bool:
@@ -54,12 +65,16 @@ class FixedRoundDifficultyCycle:
             self.completed_rounds = 0
         return self.difficulty
 
-    def status(self) -> dict[str, int | str | bool]:
+    def status(self) -> dict[str, object]:
         return {
             "difficulty": self.difficulty,
             "level": self.level,
             "completed_rounds": self.completed_rounds,
             "rounds_per_difficulty": self.rounds_per_difficulty,
+            "round_quotas": {
+                difficulty: self.round_quotas[index]
+                for index, difficulty in enumerate(DIFFICULTIES)
+            },
             "remaining_rounds": self.remaining_rounds,
             "rotation_due": self.rotation_due,
         }

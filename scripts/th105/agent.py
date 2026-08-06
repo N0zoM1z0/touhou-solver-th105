@@ -27,7 +27,11 @@ from .controller_lock import (
     ControllerLock,
     default_controller_lock_path,
 )
-from .difficulty import DifficultyCurriculum, FixedRoundDifficultyCycle
+from .difficulty import (
+    DEFAULT_CYCLE_ROUND_QUOTAS,
+    DifficultyCurriculum,
+    FixedRoundDifficultyCycle,
+)
 from .battle import (
     TerminalRoundTracker,
     battle_state_json,
@@ -63,6 +67,20 @@ def positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be positive")
     return parsed
+
+
+def difficulty_round_quotas(value: str) -> tuple[int, ...]:
+    try:
+        quotas = tuple(int(part.strip()) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "cycle quotas must be comma-separated integers"
+        ) from exc
+    if len(quotas) != len(DIFFICULTIES) or any(quota <= 0 for quota in quotas):
+        raise argparse.ArgumentTypeError(
+            "cycle quotas must be four positive values: easy,normal,hard,lunatic"
+        )
+    return quotas
 
 
 def open_target(api: Win32, game_dir: Path) -> tuple[ProcessReader, dict[str, object]]:
@@ -448,7 +466,11 @@ def auto_arcade(args: argparse.Namespace) -> int:
         curriculum = DifficultyCurriculum(cpu_difficulty(reader))
         fixed_cycle = FixedRoundDifficultyCycle(
             cpu_difficulty(reader),
-            rounds_per_difficulty=args.rounds_per_difficulty,
+            round_quotas=(
+                (args.rounds_per_difficulty,) * len(DIFFICULTIES)
+                if args.rounds_per_difficulty is not None
+                else args.cycle_round_quotas
+            ),
         )
         terminal_tracker = TerminalRoundTracker()
         active_difficulty = DIFFICULTIES[cpu_difficulty(reader)]
@@ -775,8 +797,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--rounds-per-difficulty",
         type=positive_int,
-        default=6,
-        help="native terminal rounds per level in cycle mode (default: 6)",
+        help="use one equal native-round quota for every level in cycle mode",
+    )
+    p.add_argument(
+        "--cycle-round-quotas",
+        type=difficulty_round_quotas,
+        default=DEFAULT_CYCLE_ROUND_QUOTAS,
+        metavar="EASY,NORMAL,HARD,LUNATIC",
+        help="weighted cycle quotas (default: 2,4,8,10)",
     )
     duration = p.add_mutually_exclusive_group()
     duration.add_argument("--battle-seconds", type=float, default=0.0)
