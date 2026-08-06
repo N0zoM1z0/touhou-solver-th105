@@ -11,7 +11,6 @@ from .constants import (
     ADDR_GAME_MODE,
     ADDR_SCENE_CONTROLLER,
     GAME_MODE_ARCADE,
-    GAME_MODE_PRACTICE,
     SCENE_BATTLE,
     SCENE_MAIN_MENU,
     SCENE_SELECT,
@@ -237,16 +236,20 @@ def select_p1_character(
         current = p1_character_selection(reader)
         if current == target:
             return history
-        # The UI is a four-column grid. Horizontal movement is intentionally
-        # used only within the target row for the verified Sakuya bootstrap.
-        if current // 4 != target // 4:
-            raise RuntimeError(
-                "cross-row character navigation is not calibrated yet; "
-                f"current={current}, target={target}"
-            )
-        right_distance = target - current
-        left_distance = current - target
-        key = "right" if right_distance > 0 else "left"
+        current_row, current_column = divmod(current, 4)
+        target_row, target_column = divmod(target, 4)
+        if current_row != target_row:
+            next_row = current_row + (1 if target_row > current_row else -1)
+            next_row_width = min(4, len(CHARACTER_CURSOR_SLOTS) - next_row * 4)
+            if current_column >= next_row_width:
+                key = "left"
+                expected = current - 1
+            else:
+                key = "down" if next_row > current_row else "up"
+                expected = next_row * 4 + current_column
+        else:
+            key = "right" if target_column > current_column else "left"
+            expected = current + (1 if key == "right" else -1)
         keyboard.tap(key, hold_ms=70, gap_ms=260)
         after = p1_character_selection(reader)
         history.append(
@@ -257,8 +260,10 @@ def select_p1_character(
                 "character": CHARACTER_CURSOR_SLOTS[after],
             }
         )
-        if after == current:
-            raise RuntimeError(f"character-select {key} did not move from {current}")
+        if after != expected:
+            raise RuntimeError(
+                f"character-select {key} moved {current}->{after}, expected {expected}"
+            )
     raise RuntimeError(f"failed to select {character} within one roster cycle")
 
 

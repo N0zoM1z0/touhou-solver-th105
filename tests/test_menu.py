@@ -29,6 +29,7 @@ from th105.menu import (
     character_name,
     configure_cpu_difficulty,
     reach_main_menu,
+    select_p1_character,
 )
 
 
@@ -83,6 +84,16 @@ class RecoveryKeyboard:
             self.reader.scene = SCENE_MAIN_MENU
 
 
+class CharacterKeyboard:
+    def __init__(self, slot: int = 0) -> None:
+        self.slot = slot
+        self.taps: list[str] = []
+
+    def tap(self, name: str, hold_ms: int = 65, gap_ms: int = 170) -> None:
+        self.taps.append(name)
+        self.slot += {"down": 4, "up": -4, "right": 1, "left": -1}[name]
+
+
 class NativeContractTests(unittest.TestCase):
     def test_supported_binary_contract_is_explicit(self) -> None:
         self.assertEqual(len(EXPECTED_EXE_SHA256), 64)
@@ -115,6 +126,17 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(reader.difficulty, 3)
         self.assertEqual(keyboard.taps, ["z", "left", "x"])
         self.assertEqual(history[-2]["difficulty"], "lunatic")
+
+    def test_selects_patchouli_across_roster_rows_with_native_checks(self) -> None:
+        keyboard = CharacterKeyboard()
+        with patch(
+            "th105.menu.p1_character_selection",
+            side_effect=lambda _reader: keyboard.slot,
+        ):
+            history = select_p1_character(object(), keyboard, "patchouli")
+        self.assertEqual(keyboard.slot, CHARACTER_CURSOR_SLOTS.index("patchouli"))
+        self.assertEqual(keyboard.taps, ["down", "right", "right", "right"])
+        self.assertEqual(history[-1]["character"], "patchouli")
 
     def test_reach_main_menu_exits_arcade_character_select_with_cancel(self) -> None:
         reader = RecoveryReader(cancel_advances=True)

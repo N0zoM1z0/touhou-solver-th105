@@ -748,7 +748,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     )
                     continue
                 if current == 2:
-                    # Start another run with Sakuya after selecting the next
+                    # Start another run with the requested P1 after selecting the next
                     # fixed, adaptive, or cyclic difficulty.
                     requested_difficulty = choose_campaign_difficulty()
                     history.extend(

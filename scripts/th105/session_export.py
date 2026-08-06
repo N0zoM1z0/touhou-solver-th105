@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from .menu import character_name
 from .reward import DEFAULT_REWARD, REWARD_VERSION
 from .schema import ACTION_SCHEMA_VERSION, TRAINING_GENERATION
 
@@ -203,6 +204,11 @@ transitions across {stats["terminal_rounds"]} native terminal rounds. The target
 was {experiment["target_rounds"]} rounds; collection stops at a complete Arena
 match boundary, so the actual count may be slightly higher.
 
+The verified P1 is `{experiment["p1_character"]}`
+(`{experiment["p1_vtable"]}`). Store this snapshot below
+`{experiment["dataset_path_prefix"]}` in the Hugging Face dataset so artifacts
+from different playable characters cannot share a checkpoint namespace.
+
 ## Files
 
 - `data/transitions.jsonl.gz`: schema-versioned state/action/outcome/next-state
@@ -220,7 +226,7 @@ license an offline model to bypass them.
 
 ## Limitations
 
-- Behavior is adaptive. Action schema 3 records the complete current legal set;
+- Behavior is adaptive. Action schema 4 records the complete current legal set;
   `legal_actions_known` and `behavior_probability` must still be honored.
 - This is observational gameplay data, not randomized causal evidence.
 - Offline metrics are diagnostic; complete physical matches remain the final
@@ -278,6 +284,26 @@ def export_session(
         raise ValueError(f"session has incompatible action schemas: {action_schemas}")
     if generations != {TRAINING_GENERATION}:
         raise ValueError(f"session has incompatible generations: {generations}")
+    self_vtables = {
+        str(record.get("state", {}).get("self", {}).get("character_vtable", ""))
+        for record in transitions
+        if isinstance(record.get("state"), dict)
+        and isinstance(record.get("state", {}).get("self"), dict)
+    }
+    self_vtables.discard("")
+    if len(self_vtables) != 1:
+        raise ValueError(f"session mixes P1 character vtables: {sorted(self_vtables)}")
+    p1_vtable = next(iter(self_vtables))
+    try:
+        p1_character = character_name(int(p1_vtable, 16))
+    except ValueError:
+        p1_character = None
+    if p1_character is None:
+        raise ValueError(f"unsupported P1 character vtable in session: {p1_vtable}")
+    dataset_path_prefix = (
+        f"characters/{p1_character}/{TRAINING_GENERATION}/experiments/"
+        f"{experiment_name}"
+    )
 
     difficulties = {str(record.get("difficulty", "")) for record in transitions}
     transition_opponents = {str(record.get("opponent", "")) for record in transitions}
@@ -342,6 +368,9 @@ def export_session(
             "ended_at": ended_at,
             "target_rounds": target_rounds,
             "source_commit": source_commit,
+            "p1_character": p1_character,
+            "p1_vtable": p1_vtable,
+            "dataset_path_prefix": dataset_path_prefix,
         },
         "schemas": {
             "transition": sorted(

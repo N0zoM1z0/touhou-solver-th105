@@ -15,14 +15,14 @@ from th105.offline_cpu import (
     temporal_episode_split,
     validate_transition_schemas,
 )
-from th105.schema import TRAINING_GENERATION
+from th105.schema import ACTION_SCHEMA_VERSION, TRAINING_GENERATION
 
 
 def _record(episode: str, *, action: str = "236B") -> dict[str, object]:
     return {
         "schema_version": 2,
         "feature_schema_version": 1,
-        "action_schema_version": 3,
+        "action_schema_version": ACTION_SCHEMA_VERSION,
         "training_generation": TRAINING_GENERATION,
         "episode_id": episode,
         "difficulty": "lunatic",
@@ -34,7 +34,7 @@ def _record(episode: str, *, action: str = "236B") -> dict[str, object]:
             "relative_y_q4": 0,
             "closing_speed_q4": -4,
             "self": {
-                "character_vtable": "sakuya",
+                "character_vtable": "0x006B0EBC",
                 "x_q4": 10,
                 "hp_bp": 7800,
                 "spirit_bp": 6500,

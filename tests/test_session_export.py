@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.session_export import export_session
-from th105.schema import TRAINING_GENERATION
+from th105.schema import ACTION_SCHEMA_VERSION, TRAINING_GENERATION
 
 from run_th105_policy_ab import controller_result
 
@@ -19,7 +19,7 @@ def _transition(session: str, transition_id: str, step: int) -> dict[str, object
     return {
         "schema_version": 2,
         "feature_schema_version": 1,
-        "action_schema_version": 3,
+        "action_schema_version": ACTION_SCHEMA_VERSION,
         "training_generation": TRAINING_GENERATION,
         "session_id": session,
         "episode_id": "episode-a",
@@ -30,7 +30,7 @@ def _transition(session: str, transition_id: str, step: int) -> dict[str, object
         "game_build_sha256": "a" * 64,
         "policy_sha256": "b" * 64,
         "offline_policy_sha256": "d" * 64,
-        "state": {},
+        "state": {"self": {"character_vtable": "0x006B0EBC"}},
         "legal_actions": None,
         "legal_actions_known": False,
         "action": "guard",
@@ -102,7 +102,7 @@ class SessionExportTests(unittest.TestCase):
                         "time": 11.0,
                         "session_id": session,
                         "training_generation": TRAINING_GENERATION,
-                        "action_schema_version": 3,
+                        "action_schema_version": ACTION_SCHEMA_VERSION,
                         "outcome": {"won": True},
                     }
                 )
@@ -129,6 +129,11 @@ class SessionExportTests(unittest.TestCase):
             self.assertEqual(manifest["statistics"]["terminal_rounds"], 1)
             self.assertEqual(manifest["statistics"]["learning_curve_points"], 1)
             self.assertEqual(manifest["offline_policy_sha256"], ["d" * 64])
+            self.assertEqual(manifest["experiment"]["p1_character"], "patchouli")
+            self.assertEqual(
+                manifest["experiment"]["dataset_path_prefix"],
+                f"characters/patchouli/{TRAINING_GENERATION}/experiments/test",
+            )
             with gzip.open(
                 output / "data" / "transitions.jsonl.gz", "rt", encoding="utf-8"
             ) as handle:

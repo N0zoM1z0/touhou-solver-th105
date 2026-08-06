@@ -18,20 +18,20 @@ class LearningCurveTests(unittest.TestCase):
             (runtime / "th105_generation.json").write_text(
                 json.dumps(
                     {
-                        "training_generation": "autonomous-routes-v3",
-                        "action_schema_version": 3,
+                        "training_generation": "autonomous-grammar-v4",
+                        "action_schema_version": 4,
                     }
                 ),
                 encoding="utf-8",
             )
             self.assertEqual(
-                load_generation_manifest(runtime)["action_schema_version"], 3
+                load_generation_manifest(runtime)["action_schema_version"], 4
             )
             (runtime / "th105_generation.json").write_text(
                 json.dumps(
                     {
-                        "training_generation": "autonomous-routes-v3",
-                        "action_schema_version": 2,
+                        "training_generation": "autonomous-grammar-v4",
+                        "action_schema_version": 3,
                     }
                 ),
                 encoding="utf-8",
@@ -81,8 +81,8 @@ class LearningCurveTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(point["training_generation"], "autonomous-routes-v3")
-        self.assertEqual(point["action_schema_version"], 3)
+        self.assertEqual(point["training_generation"], "autonomous-grammar-v4")
+        self.assertEqual(point["action_schema_version"], 4)
         self.assertEqual(point["outcome"]["hp_differential_bp"], 6000)
         cumulative = point["cumulative"]
         self.assertEqual(cumulative["rounds"], 3)

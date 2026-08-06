@@ -9,6 +9,7 @@ import shutil
 import time
 from pathlib import Path
 
+from th105.menu import CHARACTER_VTABLES
 from th105.schema import (
     ACTION_SCHEMA_VERSION,
     CORPUS_SCHEMA_VERSION,
@@ -63,6 +64,9 @@ def main() -> int:
     parser.add_argument("--runtime-dir", type=Path, default=Path("runtime"))
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--dataset-repo", required=True)
+    parser.add_argument(
+        "--p1-character", required=True, choices=tuple(CHARACTER_VTABLES)
+    )
     parser.add_argument("--dataset-output", type=Path)
     parser.add_argument("--purge-existing", action="store_true")
     args = parser.parse_args()
@@ -92,6 +96,11 @@ def main() -> int:
         "started_at": started_at,
         "source_commit": args.source_commit,
         "dataset_repo": args.dataset_repo,
+        "dataset_path_prefix": (
+            f"characters/{args.p1_character}/{TRAINING_GENERATION}"
+        ),
+        "p1_character": args.p1_character,
+        "p1_vtable": f"0x{CHARACTER_VTABLES[args.p1_character]:08X}",
         "game_build_sha256": (
             "49c23d9467b9927ba687ed2b873c4bc2d2f39ddadc9f55051ccf10172c0b7c11"
         ),
@@ -113,9 +122,11 @@ def main() -> int:
         "legacy_data": {
             "online_reuse": False,
             "offline_reuse": False,
-            "recoverable_hf_dataset": "Joh1rreq/touhou-solver-th105-corpus",
+            "recoverable_hf_dataset": (
+                "Joh1rreq/touhou-solver-th105-autonomous-corpus"
+            ),
             "recoverable_hf_revision": (
-                "fbd13cb9c900c81d3623a9c7ac515896e2f00800"
+                "90d4994c5f8000e7ceceaf9a4ec01333bdf5b136"
             ),
         },
     }
@@ -124,18 +135,29 @@ def main() -> int:
 
     if args.dataset_output is not None:
         output = args.dataset_output.resolve()
-        if output.exists():
-            raise ValueError(f"dataset output already exists: {output}")
-        (output / "baseline").mkdir(parents=True)
+        generation_output = output / str(generation["dataset_path_prefix"])
+        if generation_output.exists():
+            raise ValueError(
+                f"dataset generation output already exists: {generation_output}"
+            )
+        (generation_output / "baseline").mkdir(parents=True)
         shutil.copy2(
             runtime_dir / "th105_opponent_models.json",
-            output / "baseline" / "th105_opponent_models.json",
+            generation_output / "baseline" / "th105_opponent_models.json",
         )
         shutil.copy2(
             runtime_dir / "th105_generation.json",
-            output / "generation.json",
+            generation_output / "generation.json",
         )
-        shutil.copy2(repository / "notes" / "HF_AUTONOMOUS_CORPUS_README.md", output / "README.md")
+        shutil.copy2(
+            repository / "notes" / "HF_AUTONOMOUS_CORPUS_README.md",
+            generation_output / "README.md",
+        )
+        if not (output / "README.md").exists():
+            shutil.copy2(
+                repository / "notes" / "HF_AUTONOMOUS_CORPUS_README.md",
+                output / "README.md",
+            )
     print(
         json.dumps(
             {
@@ -143,7 +165,11 @@ def main() -> int:
                 "removed_files": files,
                 "removed_bytes": bytes_removed,
                 "runtime_dir": str(runtime_dir),
-                "dataset_output": str(args.dataset_output) if args.dataset_output else None,
+                "p1_character": args.p1_character,
+                "dataset_path_prefix": generation["dataset_path_prefix"],
+                "dataset_output": (
+                    str(generation_output) if args.dataset_output else None
+                ),
             },
             ensure_ascii=False,
         )

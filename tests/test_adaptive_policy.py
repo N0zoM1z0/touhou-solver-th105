@@ -9,7 +9,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.policies.adaptive import (
-    SakuyaAdaptivePolicy,
+    AutonomousAdaptivePolicy,
     _bounded_bandit_score,
     _demonstration_frames,
     _demonstration_probe_frames,
@@ -18,7 +18,7 @@ from th105.policies.adaptive import (
     _pattern_has_advancing_attack,
     _native_guard_response,
 )
-from th105.motion import generated_attack_probe_hypotheses
+from th105.motion import generated_attack_probe_hypotheses, generated_motion_hypotheses
 from th105.offense_learning import ActionOutcomeModel
 from th105.battle import BattleState, FighterState
 from th105.policy_api import PolicyObservation
@@ -53,7 +53,7 @@ def _fighter(*, x: float, vtable: int, facing: int) -> FighterState:
 
 class AdaptiveNativeGeometryTests(unittest.TestCase):
     def test_neutral_decision_exposes_complete_native_gated_set(self) -> None:
-        policy = SakuyaAdaptivePolicy()
+        policy = AutonomousAdaptivePolicy()
         state = BattleState(
             manager=1,
             p1=_fighter(x=200.0, vtable=0x006B0924, facing=1),
@@ -150,7 +150,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
             self.assertTrue(any(keys & {"z", "x", "c"} for keys in frames))
 
     def test_cancel_discovery_exposes_complete_generic_followup_set(self) -> None:
-        policy = SakuyaAdaptivePolicy()
+        policy = AutonomousAdaptivePolicy()
         me = replace(
             _fighter(x=200.0, vtable=0x006B0924, facing=1),
             action_id=300,
@@ -183,6 +183,54 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         )
         self.assertTrue(any(name.endswith("motion:236B") for name in legal))
 
+    def test_patchouli_uses_the_complete_generic_motion_catalog(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        state = BattleState(
+            manager=1,
+            p1=_fighter(x=200.0, vtable=0x006B0EBC, facing=1),
+            p2=_fighter(x=600.0, vtable=0x006B18DC, facing=-1),
+        )
+        selected = policy._start_motion_hypothesis(
+            PolicyObservation(
+                frame=10,
+                state=state,
+                previous_state=None,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            ),
+            "right",
+        )
+        self.assertIsNotNone(selected)
+        legal = policy.queue_legal_actions or ()
+        self.assertEqual(len(legal), len(generated_motion_hypotheses()))
+        self.assertIn("motion-probe:236B", legal)
+        self.assertIn("motion-probe:214C", legal)
+
+    def test_close_pressure_uses_the_generic_chord_catalog(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        state = BattleState(
+            manager=1,
+            p1=_fighter(x=200.0, vtable=0x006B0EBC, facing=1),
+            p2=_fighter(x=240.0, vtable=0x006B18DC, facing=-1),
+        )
+        decision = policy.decide(
+            PolicyObservation(
+                frame=10,
+                state=state,
+                previous_state=None,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            )
+        )
+        legal = decision.legal_actions or ()
+        self.assertEqual(len(legal), len(generated_attack_probe_hypotheses()))
+        self.assertTrue(all(action.startswith("grammar-probe:") for action in legal))
+        self.assertNotIn("close-pressure-z", legal)
+
     def test_bandit_samples_untried_probe_before_known_probe(self) -> None:
         model = ActionOutcomeModel()
         model.begin(
@@ -201,7 +249,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         )
 
     def test_learned_melee_box_keeps_future_active_delay(self) -> None:
-        policy = SakuyaAdaptivePolicy()
+        policy = AutonomousAdaptivePolicy()
         geometry = policy.enemy_attack_geometry
         geometry.observe(0, action_id=305, sequence=0, pose=0, attack_boxes=())
         geometry.observe(
@@ -231,7 +279,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertEqual((hazards[0].half_width, hazards[0].half_height), (45.0, 40.0))
 
     def test_hot_reload_state_is_newer_than_disk_priors(self) -> None:
-        first = SakuyaAdaptivePolicy()
+        first = AutonomousAdaptivePolicy()
         first.enemy_attack_geometry.observe(
             0,
             action_id=305,
@@ -246,7 +294,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
             projectile_count=0,
             active_hitbox=True,
         )
-        second = SakuyaAdaptivePolicy()
+        second = AutonomousAdaptivePolicy()
         second.import_state(first.export_state())
         self.assertIsNotNone(second.enemy_attack_geometry.forecast(305, 0))
         self.assertIn(305, second.opponent.profiles)
@@ -283,66 +331,6 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertIsNotNone(utility)
         assert utility is not None
         self.assertGreater(utility, 0.0)
-
-    def test_skill_commit_allows_only_a_learned_recovery_window(self) -> None:
-        policy = SakuyaAdaptivePolicy()
-        me = SimpleNamespace(
-            action_id=0,
-            x=100.0,
-            y=0.0,
-            velocity_x=0.0,
-        )
-        enemy = SimpleNamespace(
-            action_id=400,
-            x=700.0,
-            y=0.0,
-            velocity_x=0.0,
-        )
-        observation = SimpleNamespace(
-            state=SimpleNamespace(p1=me, p2=enemy),
-            enemy_projectiles=(),
-        )
-        policy.last_assessment = SimpleNamespace(
-            phase="active",
-            confidence=1.0,
-            punish_window=30.0,
-        )
-        self.assertFalse(
-            policy._safe_to_commit_skill(
-                observation, "236B", 600.0, commitment=45, startup=10.0
-            )
-        )
-        policy.last_assessment = SimpleNamespace(
-            phase="recovery",
-            confidence=0.9,
-            punish_window=14.0,
-        )
-        self.assertTrue(
-            policy._safe_to_commit_skill(
-                observation, "236B", 600.0, commitment=45, startup=10.0
-            )
-        )
-
-    def test_skill_commit_rejects_recovery_shorter_than_startup(self) -> None:
-        policy = SakuyaAdaptivePolicy()
-        observation = SimpleNamespace(
-            state=SimpleNamespace(
-                p1=SimpleNamespace(action_id=0, x=100.0, y=0.0, velocity_x=0.0),
-                p2=SimpleNamespace(action_id=400, x=700.0, y=0.0, velocity_x=0.0),
-            ),
-            enemy_projectiles=(),
-        )
-        policy.last_assessment = SimpleNamespace(
-            phase="recovery",
-            confidence=0.9,
-            punish_window=8.0,
-        )
-        self.assertFalse(
-            policy._safe_to_commit_skill(
-                observation, "236B", 600.0, commitment=45, startup=10.0
-            )
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

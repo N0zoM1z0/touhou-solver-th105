@@ -1,5 +1,5 @@
 ---
-pretty_name: TH105 Autonomous Route Learning Corpus
+pretty_name: TH105 Autonomous Grammar Learning Corpus
 license: other
 tags:
 - touhou
@@ -9,9 +9,9 @@ tags:
 - offline-rl
 ---
 
-# TH105 autonomous route learning corpus
+# TH105 autonomous grammar learning corpus
 
-This private dataset is the clean `autonomous-routes-v3` generation produced
+This private dataset is the clean `autonomous-grammar-v4` generation produced
 by [touhou-solver-th105](https://github.com/N0zoM1z0/touhou-solver-th105).
 
 The generation starts with zero combat, human-demonstration, fixed-combo,
@@ -24,23 +24,27 @@ Schema axes are independent:
 
 - transition schema: 2
 - feature schema: 1
-- action schema: 3
+- action schema: 4
 - compact corpus schema: 2
 - learning-curve schema: 1
 
-Action schema 3 contains generated directional attack chords and motion
-hypotheses. It is intentionally incompatible with the earlier fixed-route
-action space. Offline trainers reject mixed action schemas and mixed training
-generations.
+Action schema 4 contains generated directional attack chords and the complete
+bounded motion grammar without character-specific action IDs, tactical roles,
+damage values, or combo seeds. It is intentionally incompatible with earlier
+fixed-route and character-seeded action spaces. Offline trainers reject mixed
+action schemas and mixed training generations.
 
 ## Layout
 
-- `generation.json`: immutable generation identity and zero-data baseline.
-- `baseline/th105_opponent_models.json`: empty compact model state.
-- future `checkpoints/`: versioned option-transition, terminal, learning-curve,
-  and compact-model snapshots from this generation only.
+- `characters/<p1>/<generation>/generation.json`: immutable generation identity.
+- `characters/<p1>/<generation>/baseline/`: empty compact model state.
+- `characters/<p1>/<generation>/checkpoints/`: versioned transitions, terminals,
+  learning curves, and compact-model snapshots.
+- Every session transition also carries the native P1 vtable, so folder identity
+  can be validated rather than trusted from its path alone.
+- Future character generations use sibling prefixes and never share online
+  checkpoints.
 
 The dataset contains no executable, game assets, screenshots, credentials, or
 raw process-memory dumps. Raw outcome components remain separate from reward
 weights so later CPU training can change scalarization without recollection.
-

@@ -16,7 +16,7 @@ class PolicyObservation:
     previous_state: Any | None
     enemy_projectiles: tuple[Any, ...]
     # Added compatibly at the tail: old policies ignore it, while a freshly
-    # started battle shell can expose Sakuya's live knife layout.
+    # started battle shell can expose the selected P1's live projectile layout.
     own_projectiles: tuple[Any, ...] = ()
     prior_opponent_model: dict[str, object] = field(default_factory=dict)
     prior_projectile_model: dict[str, object] = field(default_factory=dict)

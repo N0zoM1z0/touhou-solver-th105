@@ -6,9 +6,9 @@ or reward formula. A learner may change without invalidating observations.
 ## Version axes
 
 - `schema_version` describes field names, units, and encoding.
-- `action_schema_version` describes the legal option vocabulary. Version 3 is
-  the generated `autonomous-routes-v3` grammar and is incompatible with legacy
-  fixed-route labels.
+- `action_schema_version` describes the legal option vocabulary. Version 4 is
+  the seed-free `autonomous-grammar-v4` vocabulary and is incompatible with
+  legacy fixed-route and character-seeded labels.
 - `reward_version` describes only how outcome fields are scalarized.
 - compiled policy artifacts are disposable caches and may be regenerated.
 
@@ -36,7 +36,7 @@ new observation.
    state, exact native-gated legal action set, chosen
    action and behavior probability, duration, raw outcome components, next
    state, opponent/difficulty, and independent schema versions. Action schema
-   v3 uses an exact singleton after a hard priority/commitment gate and a full
+   v4 uses an exact singleton after a hard priority/commitment gate and a full
    set wherever several candidates survive; legacy unknown sets remain `null`.
    A legal-set change is itself an option boundary. The live JSONL plus eight gzip
    rotations are capped; an offline compactor can later produce immutable

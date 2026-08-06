@@ -42,7 +42,7 @@ class BattleKeyboard(Protocol):
     ) -> None: ...
 
 
-# A deliberately conservative visible bootstrap. It keeps Sakuya moving and
+# A deliberately conservative visible bootstrap. It keeps the selected P1 moving and
 # exercising melee/projectile inputs while telemetry fields are being promoted.
 # The guard portions are both standing and crouching back for a left-side spawn.
 BOOTSTRAP_CYCLE: tuple[ComboStep, ...] = parse_combo(
@@ -581,6 +581,13 @@ def run_adaptive_fight(
         else load_generation_manifest(Path("runtime"))
     )
     training_generation = str(generation_manifest["training_generation"])
+    expected_p1_vtable = str(generation_manifest.get("p1_vtable", ""))
+    observed_p1_vtable = f"0x{state.p1.vtable:08X}"
+    if expected_p1_vtable and expected_p1_vtable != observed_p1_vtable:
+        raise ValueError(
+            "runtime generation belongs to a different P1: "
+            f"expected {expected_p1_vtable}, observed {observed_p1_vtable}"
+        )
     learning_curve = (
         BoundedJsonlWriter(
             telemetry_path.with_name("th105_learning_curve.jsonl"),

@@ -1,7 +1,7 @@
 # touhou-solver-th105
 
 An experimental, explainable autoplay engine for Touhou 10.5 / Scarlet Weather
-Rhapsody. It launches and navigates Arcade campaigns with Sakuya, senses
+Rhapsody. It launches and navigates Arcade campaigns with any supported 1P, senses
 native combat state, drives the game through a reversible background DirectInput
 bridge, and learns compact per-character offense and defense models from play.
 
@@ -11,7 +11,7 @@ It supports one exact `th105c.exe` build identified by SHA-256 in
 
 ## Current capabilities
 
-- Native scene validation, Sakuya menu navigation, and fixed or automatically
+- Native scene validation, cross-row character navigation, and fixed or automatically
   promoted `Easy/Normal/Hard/Lunatic` CPU difficulty.
 - Background-capable injected input with exact-byte validation, orphan recovery,
   key release on exit, and post-cleanup verification.
@@ -143,7 +143,7 @@ run_th105_auto_arcade.bat
 ```
 
 The launcher is equivalent to
-`auto-arcade --launch --p1-character sakuya --battle-seconds 300`. The default
+`auto-arcade --launch --p1-character patchouli --battle-seconds 300`. The default
 `--difficulty curriculum` promotes one level after sustained wins and demotes
 one level after sustained losses; pass `--difficulty easy`, `normal`, `hard`, or
 `lunatic` for a fixed campaign, or `--difficulty cycle` to rotate
@@ -181,7 +181,7 @@ TH105 focus/reacquisition is desired. Round-end and Arcade dialogue screens
 receive sparse process-local Z edges so the campaign can continue.
 
 For an unattended learning run, use `run_th105_overnight.bat`, equivalent to
-`auto-arcade --launch --p1-character sakuya --difficulty cycle
+`auto-arcade --launch --p1-character patchouli --difficulty cycle
 --cycle-round-quotas 2,4,8,10 --continuous`. Each completed
 encounter atomically checkpoints its per-opponent model, with an additional
 60-second crash-recovery checkpoint; Ctrl+C restores the input bridge before
@@ -192,13 +192,14 @@ Select `--playstyle defensive`, `balanced`, or `aggressive` to reinterpret the
 same stored outcome components with different reward weights and action priors.
 Profiles do not duplicate or invalidate the corpus: defensive values survival
 and tail-risk avoidance, balanced is the default, and aggressive increases
-damage/effect credit, approach pressure, skill cadence, and safe-window
+damage/effect credit, approach pressure, motion-probe cadence, and safe-window
 exploration while retaining every native hazard and commitment gate.
 
 Move discovery is character-agnostic at the framework layer. A bounded motion
 grammar currently generates `22`, `236`, `214`, `623`, and `421` with each of
-the physical `Z/X/C` attack buttons. Known Sakuya commands are only seeds; all
-other commands are hypotheses. The agent records action-ID changes,
+the physical `Z/X/C` attack buttons. Every command is an initially unlabelled
+hypothesis; no character action ID, damage, range, or tactical role is seeded.
+The agent records action-ID changes,
 displacement, projectile creation, damage, self-damage, spirit, whiffs, and
 commitment, so nonexistent commands lose selection probability while useful
 teleports, attacks, or setup moves retain value. Motion outcomes are keyed by
@@ -214,8 +215,8 @@ Event-aligned intent transitions are staged in the bounded, compressed
 `runtime/th105_transitions.jsonl` corpus with raw outcome components and
 versioned state/action schemas; this does not alter the live decision path.
 
-Training permits bounded skill probes in safe far-neutral states and during a
-learned enemy recovery window long enough to cover the move's startup. The same
+Training permits bounded generic motion probes in safe far-neutral states and
+learned enemy recovery windows. The same
 native projectile forecast and resource checks remain active, while observed
 punishes down-rank bad probes automatically.
 
@@ -331,7 +332,7 @@ python scripts/install_th105_offline_policy.py --bundle policy-lunatic30
 The installer atomically writes `runtime/th105_offline_policy.json`. A battle
 loads it at the next encounter boundary. It blends supported offline outcomes
 into complete already-gated sets for defense, projectile evasion, movement,
-counterattack/combos, and space-control skills. It cannot create a legal action
+counterattack/combos, and generic motion probes. It cannot create a legal action
 or bypass native hazard, range, resource, startup, or recovery gates.
 
 Every option transition and sanitized encounter summary records the loaded
