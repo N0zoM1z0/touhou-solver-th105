@@ -100,8 +100,23 @@ def select_combo(
     learned_adjustments: dict[str, float] | None = None,
 ) -> ComboCandidate | None:
     """Choose damage subject to range, geometry and post-combo reserve."""
+    viable = rank_combos(
+        context,
+        reserve_spirit=reserve_spirit,
+        learned_adjustments=learned_adjustments,
+    )
+    return viable[0][1] if viable else None
+
+
+def rank_combos(
+    context: ComboContext,
+    *,
+    reserve_spirit: int = 200,
+    learned_adjustments: dict[str, float] | None = None,
+) -> tuple[tuple[float, ComboCandidate], ...]:
+    """Return every native/context-gated route, highest base score first."""
     if context.enemy_y > 44.0:
-        return None
+        return ()
     viable: list[tuple[float, ComboCandidate]] = []
     for combo in COMBOS:
         if context.distance > combo.max_distance:
@@ -122,4 +137,4 @@ def select_combo(
         if learned_adjustments is not None:
             score += learned_adjustments.get(combo.name, 0.0)
         viable.append((score, combo))
-    return max(viable, default=(0.0, None), key=lambda item: item[0])[1]
+    return tuple(sorted(viable, key=lambda item: (item[0], item[1].name), reverse=True))

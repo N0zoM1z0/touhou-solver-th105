@@ -464,12 +464,17 @@ def run_adaptive_fight(
     session_id: str | None = None,
     game_build_sha256: str | None = None,
     rounds_until_rotation: int | None = None,
+    exploration_rate: float = 0.08,
+    transition_opponent_filter: str | None = None,
+    persist_online: bool = True,
 ) -> dict[str, int | float | str | object]:
     """Sense/actuate shell around a fail-safe hot-reloadable combat policy."""
     if seconds <= 0 or frame_hz <= 0:
         raise ValueError("battle duration and frame rate must be positive")
     if rounds_until_rotation is not None and rounds_until_rotation <= 0:
         raise ValueError("rounds until rotation must be positive")
+    if not 0.0 <= exploration_rate <= 1.0:
+        raise ValueError("exploration rate must be between zero and one")
     state = read_battle_state(reader)
     terminal_tracker = terminal_tracker or TerminalRoundTracker()
     initial = battle_state_json(state)
@@ -565,6 +570,10 @@ def run_adaptive_fight(
         BoundedJsonlWriter(telemetry_path)
         if telemetry_path is not None else None
     )
+    record_this_opponent = (
+        transition_opponent_filter is None
+        or base_opponent_key.casefold() == transition_opponent_filter.casefold()
+    )
     transition_recorder = (
         OptionTransitionRecorder(
             BoundedJsonlWriter(
@@ -579,7 +588,7 @@ def run_adaptive_fight(
             game_build_sha256=game_build_sha256,
             offline_policy_sha256=offline_artifact_sha256,
         )
-        if telemetry_path is not None else None
+        if telemetry_path is not None and record_this_opponent else None
     )
 
     def compact_plugin_status(status: dict[str, object]) -> dict[str, object]:
@@ -616,7 +625,7 @@ def run_adaptive_fight(
         # Scene 5 can briefly reappear with dead fighters during transitions.
         # Such a shell never seeded its plugin and must not erase cumulative
         # knowledge with an empty state.
-        if knowledge_path is None or decision_frames == 0:
+        if not persist_online or knowledge_path is None or decision_frames == 0:
             return False
         status = plugin.status()
         metrics = status.get("metrics", {})
@@ -673,6 +682,12 @@ def run_adaptive_fight(
                 "loaded": bool(prior_offline_policy),
                 "sha256": offline_artifact_sha256,
                 "error": offline_artifact_error,
+            },
+            "collection": {
+                "record_this_opponent": record_this_opponent,
+                "transition_opponent_filter": transition_opponent_filter,
+                "persist_online": persist_online,
+                "exploration_rate": exploration_rate,
             },
         },
     )
@@ -816,6 +831,7 @@ def run_adaptive_fight(
                     prior_offline_policy=prior_offline_policy,
                     difficulty=difficulty,
                     opponent_key=opponent_key,
+                    exploration_rate=exploration_rate,
                 )
             )
             decision_frames += 1

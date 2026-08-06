@@ -28,6 +28,9 @@ class PolicyObservation:
     prior_offline_policy: dict[str, object] = field(default_factory=dict)
     difficulty: str = "unknown"
     opponent_key: str = "unknown"
+    # Exploration is applied only after native legality/safety gates.  A/B
+    # evaluation sets this to zero; corpus collection can deliberately widen it.
+    exploration_rate: float = 0.08
 
 
 @dataclass(frozen=True)

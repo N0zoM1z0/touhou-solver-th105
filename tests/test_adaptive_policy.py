@@ -19,9 +19,60 @@ from th105.policies.adaptive import (
     _native_guard_response,
 )
 from th105.offense_learning import ActionOutcomeModel
+from th105.battle import BattleState, FighterState
+from th105.policy_api import PolicyObservation
+
+
+def _fighter(*, x: float, vtable: int, facing: int) -> FighterState:
+    return FighterState(
+        pointer=1,
+        vtable=vtable,
+        x=x,
+        y=0.0,
+        velocity_x=0.0,
+        velocity_y=0.0,
+        facing=facing,
+        action_id=0,
+        action_sequence=0,
+        action_pose=0,
+        action_frame=0,
+        frame_data_flags=0,
+        attack_flags=0,
+        hp=10000,
+        max_hp=10000,
+        collision_state=0,
+        spirit=1000,
+        command_mask=0,
+        frame_data=0,
+        body_box=None,
+        hurt_boxes=(),
+        attack_boxes=(),
+    )
 
 
 class AdaptiveNativeGeometryTests(unittest.TestCase):
+    def test_neutral_decision_exposes_complete_native_gated_set(self) -> None:
+        policy = SakuyaAdaptivePolicy()
+        state = BattleState(
+            manager=1,
+            p1=_fighter(x=200.0, vtable=0x006B0924, facing=1),
+            p2=_fighter(x=600.0, vtable=0x006B18DC, facing=-1),
+        )
+        decision = policy.decide(
+            PolicyObservation(
+                frame=0,
+                state=state,
+                previous_state=None,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            )
+        )
+        self.assertIn(decision.intent, decision.legal_actions or ())
+        self.assertGreaterEqual(len(decision.legal_actions or ()), 2)
+        self.assertEqual(decision.behavior_probability, 1.0)
+
     def test_frame_attack_box_replaces_learned_square_extent(self) -> None:
         projectile = SimpleNamespace(
             x=100.0,
@@ -201,17 +252,25 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
     def test_skill_commit_allows_only_a_learned_recovery_window(self) -> None:
         policy = SakuyaAdaptivePolicy()
         me = SimpleNamespace(
-            action_id=0, x=100.0, y=0.0, velocity_x=0.0,
+            action_id=0,
+            x=100.0,
+            y=0.0,
+            velocity_x=0.0,
         )
         enemy = SimpleNamespace(
-            action_id=400, x=700.0, y=0.0, velocity_x=0.0,
+            action_id=400,
+            x=700.0,
+            y=0.0,
+            velocity_x=0.0,
         )
         observation = SimpleNamespace(
             state=SimpleNamespace(p1=me, p2=enemy),
             enemy_projectiles=(),
         )
         policy.last_assessment = SimpleNamespace(
-            phase="active", confidence=1.0, punish_window=30.0,
+            phase="active",
+            confidence=1.0,
+            punish_window=30.0,
         )
         self.assertFalse(
             policy._safe_to_commit_skill(
@@ -219,7 +278,9 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
             )
         )
         policy.last_assessment = SimpleNamespace(
-            phase="recovery", confidence=0.9, punish_window=14.0,
+            phase="recovery",
+            confidence=0.9,
+            punish_window=14.0,
         )
         self.assertTrue(
             policy._safe_to_commit_skill(
@@ -237,7 +298,9 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
             enemy_projectiles=(),
         )
         policy.last_assessment = SimpleNamespace(
-            phase="recovery", confidence=0.9, punish_window=8.0,
+            phase="recovery",
+            confidence=0.9,
+            punish_window=8.0,
         )
         self.assertFalse(
             policy._safe_to_commit_skill(

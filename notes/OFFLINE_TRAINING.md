@@ -13,9 +13,9 @@ defense, movement, or bounded neutral option) in `th105_transitions.jsonl`:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "feature_schema_version": 1,
-  "action_schema_version": 1,
+  "action_schema_version": 2,
   "game_build_sha256": "...",
   "episode_id": "...",
   "step": 17,
@@ -36,8 +36,8 @@ defense, movement, or bounded neutral option) in `th105_transitions.jsonl`:
     "enemy_phase": "recovery",
     "projectile_risk_q": 23
   },
-  "legal_actions": ["high_guard", "jump_back", "214B"],
-  "action": "214B",
+  "legal_actions": ["projectile-guard", "projectile-evade:jump-back"],
+  "action": "projectile-evade:jump-back",
   "behavior_probability": 0.18,
   "duration_frames": 31,
   "outcome": {
@@ -56,11 +56,20 @@ velocities are quantized; HP and spirit use basis points. The legal-action set
 is essential: an offline trainer must not interpret a native-illegal option as
 an action the behavior policy deliberately rejected. The behavior probability
 is also required for importance-weighted evaluation; deterministic choices use
-`1.0`, while exploration records its real sampling probability. The current
-policy is deterministic and not every branch exports its exact candidate set,
-so those rows deliberately carry `legal_actions: null` and are excluded from
-algorithms that require action support. This is honest missingness, not an empty
-legal set.
+`1.0`, while exploration records its real sampling probability. Action schema
+v2 exposes an exact set for every adaptive-policy option. A hard priority or
+commitment gate with no remaining alternative emits the honest singleton
+`[action]`; multi-action sets cover defense, native-safe projectile movement,
+neutral/advantage movement, space-control skills, and context-valid combo
+routes. The recorder starts a new option whenever this set changes, even if the
+intent string does not. Legacy rows may still contain `legal_actions: null` and
+must remain excluded from methods that require known support.
+
+The JSONL stores repeated action strings deliberately. At option granularity
+this is small, and gzip dictionary compression removes most repetition without
+introducing a dataset-global ID table that is awkward to merge. Every export
+reports raw transition bytes, compressed bytes, and compressed bytes per
+transition in its manifest.
 
 Rows should be dictionary encoded into Arrow/Parquet shards with Zstd
 compression. Shards are immutable, checksummed, and listed in a manifest. A
@@ -136,6 +145,13 @@ opponent, and difficulty features avoid lossy integer IDs. Complete episodes are
 held out chronologically, never split into adjacent random rows. Independent
 heads can be trained concurrently across a many-core server; each individual
 head may use fewer threads if memory bandwidth becomes the bottleneck.
+
+For distillation, the trainer fits only factual rows. It then clones each state
+once per logged legal action, changes only the categorical `option`, and asks
+the fitted outcome heads for predictions. `distilled_policy.json` therefore has
+rows for the complete native-gated candidate set. Each row reports both legal
+opportunity `support` and `factual_support`; counterfactual model outputs are
+ranking estimates, not fabricated observed rewards or causal proof.
 
 Separate heads prevent abundant guard samples from drowning sparse combo and
 skill evidence. The engine's tactical gate selects defense, offense, or neutral;
@@ -252,6 +268,27 @@ The candidate with better complete-round play is retained; inconclusive results
 collect more rounds instead of being discarded by proxy metrics. Its
 `evaluation.json` remains beside the artifact so the decision is auditable and
 reversible.
+
+### Fixed-condition collection
+
+Use `scripts/collect_th105_fixed.py` for algorithm-comparison strata. It fixes
+CPU difficulty, records only one requested opponent, and freezes the captured
+online checkpoint so preceding Arena opponents cannot mutate the starting
+policy. Coverage exploration remains behind native gates:
+
+```bash
+python scripts/collect_th105_fixed.py \
+  --difficulty lunatic --opponent yukari --arena-rounds 30 \
+  --exploration-rate 0.16 \
+  --output runtime/experiments/fixed-lunatic-yukari
+```
+
+Train ExtraTrees, histogram XGBoost, and CatBoost from that exact export, then
+compare them with exploration zero in fixed physical screens. CQL/IQL/FQI are a
+later escalation after sequential support and effective sample size are
+adequate. FQI is the most natural CPU-first next step; all Q artifacts are
+reward-dependent and must stamp their reward profile even though the raw corpus
+remains reusable.
 
 ## Reusability rule
 

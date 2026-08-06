@@ -21,6 +21,7 @@ from th105.offline_cpu import (
     CPU_FEATURE_SCHEMA_VERSION,
     FEATURE_NAMES,
     NUMERIC_FEATURES,
+    candidate_prediction_records,
     distillation_context,
     feature_vector,
     outcome_targets,
@@ -68,9 +69,7 @@ def _load_records(path: Path) -> list[dict[str, object]]:
             try:
                 value = json.loads(raw)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"malformed transition at line {line_number}"
-                ) from exc
+                raise ValueError(f"malformed transition at line {line_number}") from exc
             if not isinstance(value, dict):
                 raise ValueError(f"non-object transition at line {line_number}")
             records.append(value)
@@ -91,9 +90,7 @@ def _metrics(actual: list[float], predicted: list[float]) -> dict[str, float]:
     errors = [prediction - target for target, prediction in zip(actual, predicted)]
     return {
         "mae": sum(abs(error) for error in errors) / max(1, len(errors)),
-        "rmse": math.sqrt(
-            sum(error * error for error in errors) / max(1, len(errors))
-        ),
+        "rmse": math.sqrt(sum(error * error for error in errors) / max(1, len(errors))),
     }
 
 
@@ -120,9 +117,7 @@ def _constant_head(
     return [value], {
         "kind": "constant",
         "value": value,
-        "validation": _metrics(
-            validation_values, [value] * len(validation_values)
-        ),
+        "validation": _metrics(validation_values, [value] * len(validation_values)),
     }
 
 
@@ -149,9 +144,7 @@ def _train_catboost_ensemble(
 
     import numpy as np
 
-    categorical_indices = [
-        FEATURE_NAMES.index(name) for name in CATEGORICAL_FEATURES
-    ]
+    categorical_indices = [FEATURE_NAMES.index(name) for name in CATEGORICAL_FEATURES]
     train_rows = [rows[index] for index in train_indices]
     validation_rows = [rows[index] for index in validation_indices]
     predictions: dict[str, list[float]] = {}
@@ -281,9 +274,7 @@ def _train_xgboost(
                 }
             )
         else:
-            parameters.update(
-                {"objective": "reg:squarederror", "eval_metric": "rmse"}
-            )
+            parameters.update({"objective": "reg:squarederror", "eval_metric": "rmse"})
         model = XGBRegressor(**parameters)
         model.fit(
             train_frame,
@@ -425,9 +416,15 @@ def _distilled_payload(
         action = str(record.get("action", "unknown"))
         entry = working.setdefault(
             (context, action),
-            {"support": 0, "sums": {name: 0.0 for name in predictions}},
+            {
+                "support": 0,
+                "factual_support": 0,
+                "sums": {name: 0.0 for name in predictions},
+            },
         )
         entry["support"] = int(entry["support"]) + 1
+        if action == str(record.get("__factual_action", action)):
+            entry["factual_support"] = int(entry["factual_support"]) + 1
         sums = entry["sums"]
         assert isinstance(sums, dict)
         for name, values in predictions.items():
@@ -440,6 +437,12 @@ def _distilled_payload(
         assert isinstance(sums, dict)
         aggregates[context][action] = {
             "support": support,
+            "factual_support": int(entry["factual_support"]),
+            "prediction_kind": (
+                "factual-and-counterfactual"
+                if int(entry["factual_support"]) < support
+                else "factual"
+            ),
             "outcomes": {
                 name: float(total) / support for name, total in sorted(sums.items())
             },
@@ -504,7 +507,8 @@ def main() -> int:
         if not isinstance(value, dict):
             raise ValueError("corpus manifest must be a JSON object")
         corpus_manifest = value
-    rows = [feature_vector(record) for record in records]
+    prediction_records = candidate_prediction_records(records)
+    rows = [feature_vector(record) for record in prediction_records]
     targets = [outcome_targets(record) for record in records]
     train_indices, validation_indices = temporal_episode_split(
         records, validation_fraction=args.validation_fraction
@@ -549,9 +553,7 @@ def main() -> int:
             "colsample_bytree": 0.85,
         }
     else:
-        predictions, heads, libraries = _train_extra_trees(
-            **common, trees=args.trees
-        )
+        predictions, heads, libraries = _train_extra_trees(**common, trees=args.trees)
         parameters = {
             "trees": args.trees,
             "depth": args.depth,
@@ -560,7 +562,7 @@ def main() -> int:
         }
 
     distilled = _distilled_payload(
-        records,
+        prediction_records,
         predictions,
         corpus_manifest=corpus_manifest,
         min_support=args.min_distill_support,
@@ -591,6 +593,8 @@ def main() -> int:
                 else None
             ),
             "records": len(records),
+            "candidate_prediction_rows": len(prediction_records),
+            "counterfactual_prediction_rows": len(prediction_records) - len(records),
             "train_records": len(train_indices),
             "validation_records": len(validation_indices),
             "split": "chronological-complete-episode",
@@ -611,7 +615,9 @@ def main() -> int:
             "minimum_support": args.min_distill_support,
             "contexts": len(contexts),
             "context_actions": sum(
-                len(actions) for actions in contexts.values() if isinstance(actions, dict)
+                len(actions)
+                for actions in contexts.values()
+                if isinstance(actions, dict)
             ),
         },
         "deployment": {

@@ -30,10 +30,12 @@ new observation.
    are read-only caches. They can always be rebuilt from tiers 1 and 2.
 5. `runtime/th105_transitions.jsonl` is the bounded staging corpus for
    event-aligned semi-Markov transitions. Each row keeps the quantized start
-   state, legal action set when the policy can expose it exactly, chosen
+   state, exact native-gated legal action set, chosen
    action and behavior probability, duration, raw outcome components, next
-   state, opponent/difficulty, and independent schema versions. Unknown legal
-   sets are explicitly `null`, never guessed. The live JSONL plus eight gzip
+   state, opponent/difficulty, and independent schema versions. Action schema
+   v2 uses an exact singleton after a hard priority/commitment gate and a full
+   set wherever several candidates survive; legacy unknown sets remain `null`.
+   A legal-set change is itself an option boundary. The live JSONL plus eight gzip
    rotations are capped; an offline compactor can later produce immutable
    stratified Parquet shards. The concrete training/deployment contract is in
    [`OFFLINE_TRAINING.md`](OFFLINE_TRAINING.md).

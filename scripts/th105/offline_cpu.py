@@ -115,6 +115,38 @@ def feature_vector(record: dict[str, object]) -> list[str | float]:
     return [features[name] for name in FEATURE_NAMES]
 
 
+def candidate_prediction_records(
+    records: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Expand factual rows with every logged native-gated candidate.
+
+    The first ``len(records)`` rows remain factual and therefore preserve the
+    chronological train/validation indices. Additional rows are used only for
+    counterfactual model prediction and compact distillation, never as targets.
+    """
+    factual: list[dict[str, object]] = []
+    counterfactual: list[dict[str, object]] = []
+    for record in records:
+        actual = str(record.get("action", "unknown"))
+        base = dict(record)
+        base["__factual_action"] = actual
+        factual.append(base)
+        raw_legal = record.get("legal_actions")
+        legal = (
+            sorted({str(action) for action in raw_legal})
+            if isinstance(raw_legal, list)
+            else []
+        )
+        for action in legal:
+            if action == actual:
+                continue
+            candidate = dict(record)
+            candidate["action"] = action
+            candidate["__factual_action"] = actual
+            counterfactual.append(candidate)
+    return factual + counterfactual
+
+
 def outcome_targets(record: dict[str, object]) -> dict[str, float]:
     outcome = _mapping(record.get("outcome"))
     terminal = str(outcome.get("terminal") or "").casefold()

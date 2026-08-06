@@ -43,6 +43,7 @@ from .battle import (
 )
 from .menu import (
     CHARACTERS,
+    CHARACTER_VTABLES,
     DIFFICULTIES,
     configure_cpu_difficulty,
     cpu_difficulty,
@@ -443,6 +444,8 @@ def fight(args: argparse.Namespace) -> int:
 
 
 def auto_arcade(args: argparse.Namespace) -> int:
+    if not 0.0 <= args.exploration_rate <= 1.0:
+        raise ValueError("exploration rate must be between zero and one")
     api = Win32()
     controller_session_id = uuid.uuid4().hex
     if args.launch:
@@ -562,6 +565,12 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                 rounds_until_rotation=(
                                     min(round_targets) if round_targets else None
                                 ),
+                                exploration_rate=args.exploration_rate,
+                                transition_opponent_filter=(
+                                    f"0x{CHARACTER_VTABLES[args.collect_opponent]:08X}"
+                                    if args.collect_opponent else None
+                                ),
+                                persist_online=not args.freeze_online_checkpoint,
                             )
                         else:
                             encounter = run_bootstrap_fight(
@@ -875,6 +884,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--foreground-only",
         action="store_true",
         help="pause/reacquire unless TH105 owns the foreground (background is default)",
+    )
+    p.add_argument(
+        "--exploration-rate",
+        type=float,
+        default=0.08,
+        help="coverage exploration after native safety gates (0 disables it)",
+    )
+    p.add_argument(
+        "--collect-opponent",
+        choices=CHARACTERS,
+        help="write option transitions only for this opponent character",
+    )
+    p.add_argument(
+        "--freeze-online-checkpoint",
+        action="store_true",
+        help="reload but never update the starting online checkpoint",
     )
     p.set_defaults(func=auto_arcade)
     return parser

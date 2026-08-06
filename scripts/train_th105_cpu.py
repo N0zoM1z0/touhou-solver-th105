@@ -20,6 +20,7 @@ from th105.offline_cpu import (
     CATEGORICAL_FEATURES,
     CPU_FEATURE_SCHEMA_VERSION,
     FEATURE_NAMES,
+    candidate_prediction_records,
     distillation_context,
     feature_vector,
     outcome_targets,
@@ -95,7 +96,8 @@ def main() -> int:
         if not isinstance(loaded_manifest, dict):
             raise ValueError("corpus manifest must be a JSON object")
         corpus_manifest = loaded_manifest
-    rows = [feature_vector(record) for record in records]
+    prediction_records = candidate_prediction_records(records)
+    rows = [feature_vector(record) for record in prediction_records]
     targets = [outcome_targets(record) for record in records]
     train_indices, validation_indices = temporal_episode_split(
         records, validation_fraction=args.validation_fraction
@@ -115,7 +117,11 @@ def main() -> int:
             lambda target: target["connection_probability"],
         ),
         ("self_damage_bp", "RMSE", lambda target: target["self_damage_bp"]),
-        ("self_damage_p90_bp", "Quantile:alpha=0.9", lambda target: target["self_damage_bp"]),
+        (
+            "self_damage_p90_bp",
+            "Quantile:alpha=0.9",
+            lambda target: target["self_damage_bp"],
+        ),
         ("spirit_cost_bp", "RMSE", lambda target: target["spirit_cost_bp"]),
         ("punished_probability", "RMSE", lambda target: target["punished_probability"]),
         ("commitment_frames", "RMSE", lambda target: target["commitment_frames"]),
@@ -133,7 +139,9 @@ def main() -> int:
             heads[name] = {
                 "kind": "constant",
                 "value": constant,
-                "validation": _metrics(validation_values, [constant] * len(validation_values)),
+                "validation": _metrics(
+                    validation_values, [constant] * len(validation_values)
+                ),
             }
         else:
             model = CatBoostRegressor(
@@ -172,15 +180,21 @@ def main() -> int:
 
     aggregates: dict[str, dict[str, dict[str, object]]] = defaultdict(dict)
     working: dict[tuple[str, str], dict[str, object]] = {}
-    for row_index, record in enumerate(records):
+    for row_index, record in enumerate(prediction_records):
         context = distillation_context(record)
         action = str(record.get("action", "unknown"))
         key = (context, action)
         entry = working.setdefault(
             key,
-            {"support": 0, "sums": {name: 0.0 for name in predictions}},
+            {
+                "support": 0,
+                "factual_support": 0,
+                "sums": {name: 0.0 for name in predictions},
+            },
         )
         entry["support"] = int(entry["support"]) + 1
+        if action == str(record.get("__factual_action", action)):
+            entry["factual_support"] = int(entry["factual_support"]) + 1
         sums = entry["sums"]
         assert isinstance(sums, dict)
         for name, values in predictions.items():
@@ -193,6 +207,12 @@ def main() -> int:
         assert isinstance(sums, dict)
         aggregates[context][action] = {
             "support": support,
+            "factual_support": int(entry["factual_support"]),
+            "prediction_kind": (
+                "factual-and-counterfactual"
+                if int(entry["factual_support"]) < support
+                else "factual"
+            ),
             "outcomes": {
                 name: float(total) / support for name, total in sorted(sums.items())
             },
@@ -214,7 +234,9 @@ def main() -> int:
                 else []
             ),
         },
-        "contexts": {context: actions for context, actions in sorted(aggregates.items())},
+        "contexts": {
+            context: actions for context, actions in sorted(aggregates.items())
+        },
     }
     distilled_path = args.output / "distilled_policy.json"
     distilled_path.write_text(
@@ -241,6 +263,8 @@ def main() -> int:
                 else None
             ),
             "records": len(records),
+            "candidate_prediction_rows": len(prediction_records),
+            "counterfactual_prediction_rows": len(prediction_records) - len(records),
             "train_records": len(train_indices),
             "validation_records": len(validation_indices),
         },

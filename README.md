@@ -268,9 +268,12 @@ python scripts/compare_th105_policy_bundles.py \
 The comparison reports held-out metrics per outcome head and pairwise distilled
 top-action agreement. A lower transition-level error is not a promotion gate:
 the final choice still requires shadow validation and complete physical rounds.
-The current corpus has no known legal-action set, so it cannot support credible
-counterfactual CQL/IQL-style offline-policy claims; the alternative trainers
-remain outcome models behind the native legal and hazard gates.
+Action-schema-v2 corpora expose the complete native-gated option set. Trainers
+fit factual outcome heads, then predict each logged legal candidate at the same
+state; distilled rows retain both legal-opportunity and factual support. These
+are contextual outcome estimates, not causal outcomes for unexecuted actions.
+CQL/IQL/FQI still require adequate sequential coverage and effective sample
+size before their claims are credible.
 
 Install a returned bundle only after its manifest, model hash, and exact game
 build pass validation:
@@ -280,9 +283,10 @@ python scripts/install_th105_offline_policy.py --bundle policy-lunatic30
 ```
 
 The installer atomically writes `runtime/th105_offline_policy.json`. A battle
-loads it at the next encounter boundary. Initially it only blends supported
-offline outcomes into already-safe skill ranking; it cannot create a legal
-action or bypass native hazard, range, resource, startup, or recovery gates.
+loads it at the next encounter boundary. It blends supported offline outcomes
+into complete already-gated sets for defense, projectile evasion, movement,
+counterattack/combos, and space-control skills. It cannot create a legal action
+or bypass native hazard, range, resource, startup, or recovery gates.
 
 Every option transition and sanitized encounter summary records the loaded
 offline-policy SHA-256. Physical A/B results therefore remain attributable even
@@ -305,6 +309,20 @@ atomically, the common online baseline is restored before play, and controller
 output, session transitions, terminal summaries, plus final learned models are
 kept below its experiment directory. The common online baseline is restored
 again after the complete screen.
+
+Collect a fixed opponent/difficulty stratum from an immutable online checkpoint
+(other Arena opponents are played but not written):
+
+```bash
+python scripts/collect_th105_fixed.py \
+  --difficulty lunatic --opponent yukari --arena-rounds 30 \
+  --exploration-rate 0.16 \
+  --output runtime/experiments/fixed-lunatic-yukari
+```
+
+New exports report raw and gzip bytes per transition, so legal-set storage cost
+is measured directly. Candidate strings stay readable in JSONL because gzip
+compresses the small repeated vocabulary well; no per-frame dump is added.
 
 The first four-candidate screen, its integration findings, and the decision not
 to promote an artifact yet are recorded in

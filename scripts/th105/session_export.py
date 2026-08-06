@@ -33,18 +33,26 @@ SENSITIVE_FRAGMENTS = (
 def jsonl_family(path: Path) -> tuple[Path, ...]:
     """Return archived and bounded JSONL shards in oldest-to-newest order."""
     archive_dir = path.parent / "corpus_archive"
-    archives = sorted(
-        archive_dir.glob(f"{path.name}.*.gz"),
-        key=lambda candidate: (candidate.stat().st_mtime_ns, candidate.name),
-    ) if archive_dir.is_dir() else []
+    archives = (
+        sorted(
+            archive_dir.glob(f"{path.name}.*.gz"),
+            key=lambda candidate: (candidate.stat().st_mtime_ns, candidate.name),
+        )
+        if archive_dir.is_dir()
+        else []
+    )
     backups: list[tuple[int, Path]] = []
     for candidate in path.parent.glob(f"{path.name}.*.gz"):
         try:
-            index = int(candidate.name.removeprefix(f"{path.name}.").removesuffix(".gz"))
+            index = int(
+                candidate.name.removeprefix(f"{path.name}.").removesuffix(".gz")
+            )
         except ValueError:
             continue
         backups.append((index, candidate))
-    ordered = archives + [candidate for _index, candidate in sorted(backups, reverse=True)]
+    ordered = archives + [
+        candidate for _index, candidate in sorted(backups, reverse=True)
+    ]
     if path.is_file():
         ordered.append(path)
     return tuple(ordered)
@@ -64,9 +72,7 @@ def iter_jsonl_family(path: Path) -> Iterator[dict[str, object]]:
                         f"malformed JSONL in {source.name}:{line_number}"
                     ) from exc
                 if not isinstance(value, dict):
-                    raise ValueError(
-                        f"non-object JSONL in {source.name}:{line_number}"
-                    )
+                    raise ValueError(f"non-object JSONL in {source.name}:{line_number}")
                 yield value
 
 
@@ -86,7 +92,9 @@ def _write_jsonl_gz(path: Path, records: Iterable[dict[str, object]]) -> None:
     with path.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
             for index, record in enumerate(records):
-                compressed.write(_safe_json(record, label=f"{path.name}[{index}]") + b"\n")
+                compressed.write(
+                    _safe_json(record, label=f"{path.name}[{index}]") + b"\n"
+                )
 
 
 def _sha256(path: Path) -> str:
@@ -115,6 +123,7 @@ def _sanitize_session_events(
     started_at: float,
     ended_at: float,
     difficulties: set[str],
+    opponents: set[str],
 ) -> list[dict[str, object]]:
     output: list[dict[str, object]] = []
     for record in records:
@@ -123,8 +132,11 @@ def _sanitize_session_events(
             continue
         event = str(record.get("event", ""))
         difficulty = str(record.get("difficulty", ""))
+        opponent = str(record.get("opponent", ""))
         if event == "encounter-start":
             if record.get("session_id") != session_id:
+                continue
+            if opponent not in opponents:
                 continue
             output.append(
                 {
@@ -140,7 +152,11 @@ def _sanitize_session_events(
                     ),
                 }
             )
-        elif event == "round-terminal" and difficulty in difficulties:
+        elif (
+            event == "round-terminal"
+            and difficulty in difficulties
+            and opponent in opponents
+        ):
             output.append(
                 {
                     "time": timestamp,
@@ -180,10 +196,10 @@ This dataset contains compact, event-aligned observations produced by
 It does not contain the game executable, game assets, screenshots, credentials,
 or raw process-memory dumps.
 
-This snapshot is experiment `{experiment['name']}` from controller session
-`{experiment['session_id']}`. It contains {stats['transitions']} option
-transitions across {stats['terminal_rounds']} native terminal rounds. The target
-was {experiment['target_rounds']} rounds; collection stops at a complete Arena
+This snapshot is experiment `{experiment["name"]}` from controller session
+`{experiment["session_id"]}`. It contains {stats["transitions"]} option
+transitions across {stats["terminal_rounds"]} native terminal rounds. The target
+was {experiment["target_rounds"]} rounds; collection stops at a complete Arena
 match boundary, so the actual count may be slightly higher.
 
 ## Files
@@ -252,12 +268,14 @@ def export_session(
         raise ValueError(f"no transitions found for session {session_id}")
 
     difficulties = {str(record.get("difficulty", "")) for record in transitions}
+    transition_opponents = {str(record.get("opponent", "")) for record in transitions}
     events = _sanitize_session_events(
         iter_jsonl_family(runtime_dir / "th105_live.jsonl"),
         session_id=session_id,
         started_at=started_at,
         ended_at=ended_at,
         difficulties=difficulties,
+        opponents=transition_opponents,
     )
     terminals = [event for event in events if event["event"] == "round-terminal"]
 
@@ -272,10 +290,17 @@ def export_session(
     )
 
     actions = Counter(str(record.get("action", "")) for record in transitions)
-    opponents = sorted({str(record.get("opponent", "")) for record in transitions})
+    opponents = sorted(transition_opponents)
     episodes = {str(record.get("episode_id", "")) for record in transitions}
     known_legal = sum(bool(record.get("legal_actions_known")) for record in transitions)
-    punished = sum(bool(record.get("outcome", {}).get("punished")) for record in transitions)
+    legal_candidate_counts = [
+        len(record.get("legal_actions", []))
+        for record in transitions
+        if isinstance(record.get("legal_actions"), list)
+    ]
+    punished = sum(
+        bool(record.get("outcome", {}).get("punished")) for record in transitions
+    )
     wins = sum(event.get("won") is True for event in terminals)
     losses = sum(event.get("won") is False for event in terminals)
     draws = len(terminals) - wins - losses
@@ -284,7 +309,10 @@ def export_session(
     for path in sorted(output_dir.rglob("*")):
         if path.is_file() and path.name not in {"manifest.json", "README.md"}:
             relative = path.relative_to(output_dir).as_posix()
-            artifacts[relative] = {"sha256": _sha256(path), "bytes": path.stat().st_size}
+            artifacts[relative] = {
+                "sha256": _sha256(path),
+                "bytes": path.stat().st_size,
+            }
 
     manifest: dict[str, object] = {
         "export_schema_version": EXPORT_SCHEMA_VERSION,
@@ -297,16 +325,30 @@ def export_session(
             "source_commit": source_commit,
         },
         "schemas": {
-            "transition": sorted({int(record.get("schema_version", 0)) for record in transitions}),
-            "feature": sorted({int(record.get("feature_schema_version", 0)) for record in transitions}),
-            "action": sorted({int(record.get("action_schema_version", 0)) for record in transitions}),
+            "transition": sorted(
+                {int(record.get("schema_version", 0)) for record in transitions}
+            ),
+            "feature": sorted(
+                {int(record.get("feature_schema_version", 0)) for record in transitions}
+            ),
+            "action": sorted(
+                {int(record.get("action_schema_version", 0)) for record in transitions}
+            ),
             "reward": REWARD_VERSION,
         },
         "game_build_sha256": sorted(
-            {str(record.get("game_build_sha256")) for record in transitions if record.get("game_build_sha256")}
+            {
+                str(record.get("game_build_sha256"))
+                for record in transitions
+                if record.get("game_build_sha256")
+            }
         ),
         "policy_sha256": sorted(
-            {str(record.get("policy_sha256")) for record in transitions if record.get("policy_sha256")}
+            {
+                str(record.get("policy_sha256"))
+                for record in transitions
+                if record.get("policy_sha256")
+            }
         ),
         "offline_policy_sha256": sorted(
             {
@@ -328,6 +370,23 @@ def export_session(
             "actions": dict(sorted(actions.items())),
             "legal_actions_known": known_legal,
             "legal_action_coverage": known_legal / len(transitions),
+            "multi_action_transitions": sum(
+                count > 1 for count in legal_candidate_counts
+            ),
+            "mean_legal_actions": (
+                sum(legal_candidate_counts) / len(legal_candidate_counts)
+                if legal_candidate_counts
+                else 0.0
+            ),
+            "max_legal_actions": max(legal_candidate_counts, default=0),
+            "transition_json_bytes": sum(
+                len(_safe_json(record, label="transition-size")) + 1
+                for record in transitions
+            ),
+            "transition_gzip_bytes": (data_dir / "transitions.jsonl.gz").stat().st_size,
+            "gzip_bytes_per_transition": (
+                (data_dir / "transitions.jsonl.gz").stat().st_size / len(transitions)
+            ),
             "punished_transitions": punished,
             "punished_rate": punished / len(transitions),
         },
@@ -343,7 +402,5 @@ def export_session(
     (output_dir / "manifest.json").write_bytes(
         _safe_json(manifest, label="manifest") + b"\n"
     )
-    (output_dir / "README.md").write_text(
-        _dataset_card(manifest), encoding="utf-8"
-    )
+    (output_dir / "README.md").write_text(_dataset_card(manifest), encoding="utf-8")
     return manifest

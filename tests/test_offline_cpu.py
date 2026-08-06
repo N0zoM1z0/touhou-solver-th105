@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.offline_cpu import (
+    candidate_prediction_records,
     FEATURE_NAMES,
     distillation_context,
     feature_vector,
@@ -61,6 +62,15 @@ def _record(episode: str, *, action: str = "236B") -> dict[str, object]:
 
 
 class OfflineCpuTests(unittest.TestCase):
+    def test_candidate_rows_keep_factual_prefix_and_expand_legal_actions(self) -> None:
+        first = _record("a", action="guard")
+        first["legal_actions"] = ["guard", "jump", "backdash"]
+        second = _record("b", action="watch")
+        expanded = candidate_prediction_records([first, second])
+        self.assertEqual([row["action"] for row in expanded[:2]], ["guard", "watch"])
+        self.assertEqual({row["action"] for row in expanded[2:]}, {"jump", "backdash"})
+        self.assertTrue(all(row["__factual_action"] == "guard" for row in expanded[2:]))
+
     def test_feature_vector_is_stable_and_includes_nearest_projectile(self) -> None:
         vector = feature_vector(_record("a"))
         self.assertEqual(len(vector), len(FEATURE_NAMES))

@@ -129,6 +129,27 @@ class OptionTransitionRecorderTests(unittest.TestCase):
         self.assertEqual(writer.rows[0]["policy_generation"], 1)
         self.assertEqual(writer.rows[0]["duration_frames"], 4)
 
+    def test_legal_set_change_is_an_explicit_boundary(self) -> None:
+        writer = MemoryWriter()
+        recorder = self.recorder(writer)
+        recorder.observe(
+            frame=0,
+            state=battle(),
+            decision=PolicyDecision(
+                frozenset({"left"}), "guard", legal_actions=("guard", "jump")
+            ),
+        )
+        recorder.observe(
+            frame=3,
+            state=battle(),
+            decision=PolicyDecision(
+                frozenset({"left"}), "guard", legal_actions=("guard",)
+            ),
+        )
+        self.assertEqual(len(writer.rows), 1)
+        self.assertEqual(writer.rows[0]["duration_frames"], 3)
+        self.assertEqual(writer.rows[0]["legal_actions"], ["guard", "jump"])
+
     def test_bulk_writer_flushes_at_episode_boundary(self) -> None:
         writer = BulkMemoryWriter()
         recorder = self.recorder(writer)

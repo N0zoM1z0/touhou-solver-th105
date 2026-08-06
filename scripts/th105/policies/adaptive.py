@@ -8,6 +8,7 @@ import time
 from collections import Counter, deque
 
 from ..attack_geometry import AttackGeometryModel
+from ..action_selection import CoverageExplorer
 from ..battle import boxes_world_envelope, local_box_to_world
 from ..cancel_learning import CancelGraphModel
 from ..defense_learning import DefenseResponseModel
@@ -20,7 +21,7 @@ from ..opponent_model import ActionAssessment, OpponentActionModel
 from ..policy_api import POLICY_API_VERSION, PolicyDecision, PolicyObservation
 from ..projectile_model import ProjectileEnvelopeModel
 from ..reward import empirical_action_value
-from ..sakuya_combos import COMBOS, ComboContext, select_combo
+from ..sakuya_combos import COMBOS, ComboContext, rank_combos
 from ..tactics import ActionCandidate, TacticalContext, rank_actions
 
 
@@ -32,6 +33,7 @@ SKILL_ACTIONS = {
     "623B": 540,
     "623C": 541,
 }
+
 
 # Keep the movement macros inside the policy plugin.  The resident battle shell
 # deliberately has a tiny stable ABI; importing newly-added helpers from an
@@ -250,6 +252,17 @@ def _response_has_damage(model: object, signature: str, response: str) -> bool:
     return int(getattr(stats, "damage_events", 0)) > 0
 
 
+def _defense_intent(response: str) -> str:
+    return {
+        "high_guard": "strike-guard-high",
+        "low_guard": "strike-guard-low",
+        "backdash": "learned-defense-backdash",
+        "jump_back": "learned-defense-jump-back",
+        "airdash_back": "learned-defense-airdash_back",
+        "flight_up": "learned-defense-flight-up",
+    }[response]
+
+
 def _demonstration_frames(pattern: str, toward: str) -> list[set[str]]:
     """Decode a bounded facing-normalized human input pattern."""
     back = "left" if toward == "right" else "right"
@@ -317,7 +330,7 @@ def _demonstration_probe_frames(pattern: str, toward: str) -> list[set[str]]:
     end = attack_index + 1
     while end < len(frames) and frames[end] & {"z", "x", "c"}:
         end += 1
-    probe = frames[start:min(len(frames), end + 2)][:12]
+    probe = frames[start : min(len(frames), end + 2)][:12]
     return probe if any(keys & {"z", "x", "c"} for keys in probe) else []
 
 
@@ -366,7 +379,13 @@ class SakuyaAdaptivePolicy:
 
     def __init__(self) -> None:
         self.queue: deque[set[str]] = deque()
+        self.queue_intent: str | None = None
+        self.queue_legal_actions: tuple[str, ...] | None = None
+        self.queue_behavior_probability = 1.0
         self.evade_queue: deque[set[str]] = deque()
+        self.evade_queue_intent: str | None = None
+        self.evade_legal_actions: tuple[str, ...] | None = None
+        self.evade_behavior_probability = 1.0
         self.attack_cooldown = 0
         self.skill_cooldown = 45
         self.evade_cooldown = 0
@@ -394,6 +413,9 @@ class SakuyaAdaptivePolicy:
         self.enemy_attack_geometry = AttackGeometryModel()
         self.cancel_graph = CancelGraphModel()
         self.offline_policy = DistilledOutcomePolicy()
+        self.coverage_explorer = CoverageExplorer()
+        self._decision_legal_actions: tuple[str, ...] | None = None
+        self._decision_probability = 1.0
         self.cancel_cooldown = 0
         self.last_assessment = ActionAssessment(0, 0, "neutral", 0.0, 0.0, 0.0, False)
         self.last_tactical_scores: list[dict[str, float | str]] = []
@@ -413,6 +435,8 @@ class SakuyaAdaptivePolicy:
         self.last_damage_frame = -10000
         self.last_damage_context: dict[str, object] = {}
         self.defense_motion_issued = False
+        self.defense_legal_actions: tuple[str, ...] | None = None
+        self.defense_behavior_probability = 1.0
         self.guard_chain_until = 0
         self.hazard_calls = 0
         self.hazard_total_ns = 0
@@ -436,6 +460,7 @@ class SakuyaAdaptivePolicy:
             "attack_geometry": self.enemy_attack_geometry.export_state(),
             "cancel_graph": self.cancel_graph.export_state(),
             "cancel_cooldown": self.cancel_cooldown,
+            "coverage_explorer": self.coverage_explorer.export_state(),
         }
 
     def import_state(self, state: dict[str, object]) -> None:
@@ -458,6 +483,7 @@ class SakuyaAdaptivePolicy:
         self.enemy_attack_geometry.import_state(state.get("attack_geometry", {}))
         self.cancel_graph.import_state(state.get("cancel_graph", {}))
         self.cancel_cooldown = int(state.get("cancel_cooldown", 0))
+        self.coverage_explorer.import_state(state.get("coverage_explorer", {}))
         # A hot-reload state is newer than the encounter-start disk prior.
         # Prevent the first decide() of the new generation from overwriting it.
         self.projectile_knowledge_seeded = True
@@ -495,7 +521,8 @@ class SakuyaAdaptivePolicy:
             active_start = 1
             active_end = (
                 max(1, forecast.last_active_elapsed - elapsed)
-                if forecast is not None else 2
+                if forecast is not None
+                else 2
             )
         elif forecast is not None and forecast.last_active_elapsed >= elapsed:
             boxes = (forecast.attack_envelope,)
@@ -528,7 +555,57 @@ class SakuyaAdaptivePolicy:
     def _decision(self, keys: set[str], intent: str) -> PolicyDecision:
         self.counts[f"intent:{intent}"] += 1
         self.previous_intent = intent
-        return PolicyDecision(frozenset(keys), intent)
+        legal_actions = self._decision_legal_actions or (intent,)
+        probability = (
+            self._decision_probability
+            if intent in legal_actions and 0.0 < self._decision_probability <= 1.0
+            else 1.0
+        )
+        if intent not in legal_actions:
+            legal_actions = (intent,)
+        return PolicyDecision(
+            frozenset(keys),
+            intent,
+            legal_actions=legal_actions,
+            behavior_probability=probability,
+        )
+
+    def _choose_legal_action(
+        self,
+        observation: PolicyObservation,
+        family: str,
+        scores: dict[str, float],
+    ) -> str:
+        """Rank and explore one already native-gated candidate set."""
+        if not scores:
+            raise ValueError("empty native-gated candidate set")
+        offline_context = live_distillation_context(
+            difficulty=str(getattr(observation, "difficulty", "unknown")),
+            opponent=str(getattr(observation, "opponent_key", "unknown")),
+            state=observation.state,
+            enemy_projectiles=tuple(observation.enemy_projectiles),
+        )
+        combined = dict(scores)
+        if self.offline_policy.contexts:
+            for action in combined:
+                offline = self.offline_policy.score(offline_context, action)
+                if offline is not None:
+                    combined[action] += 0.35 * offline.adjustment
+                    self.counts[f"offline_candidate_hit:{family}"] += 1
+                else:
+                    self.counts[f"offline_candidate_miss:{family}"] += 1
+        selection = self.coverage_explorer.choose(
+            f"{family}:{offline_context}",
+            combined,
+            exploration_rate=float(getattr(observation, "exploration_rate", 0.08)),
+        )
+        self._decision_legal_actions = selection.legal_actions
+        self._decision_probability = selection.behavior_probability
+        if selection.action != selection.greedy_action:
+            self.counts[f"coverage_exploration:{family}"] += 1
+        self.counts[f"legal_decisions:{family}"] += 1
+        self.counts[f"legal_candidates:{family}"] += len(selection.legal_actions)
+        return selection.action
 
     def _evaluate_hazard(self, *args, **kwargs):
         started = time.perf_counter_ns()
@@ -539,6 +616,13 @@ class SakuyaAdaptivePolicy:
             self.hazard_calls += 1
             self.hazard_total_ns += elapsed
             self.hazard_max_ns = max(self.hazard_max_ns, elapsed)
+
+    def _begin_evade_sequence(self, frames: list[set[str]], intent: str) -> set[str]:
+        self.evade_queue.extend(frames)
+        self.evade_queue_intent = intent
+        self.evade_legal_actions = self._decision_legal_actions or (intent,)
+        self.evade_behavior_probability = self._decision_probability
+        return self.evade_queue.popleft()
 
     def _start_combo(
         self,
@@ -567,17 +651,24 @@ class SakuyaAdaptivePolicy:
             )
             for candidate in COMBOS
         }
-        try:
-            combo = select_combo(
-                combo_context,
-                learned_adjustments=adjustments,
-            )
-        except TypeError:
-            # A resident controller may have cached the pre-learning catalogue.
-            combo = select_combo(combo_context)
-        if combo is None:
+        viable = rank_combos(
+            combo_context,
+            learned_adjustments=adjustments,
+        )
+        if not viable:
             return None
+        prefix = "punish" if punish else "combo"
+        by_action = {f"{prefix}:{combo.name}": combo for _score, combo in viable}
+        chosen_action = self._choose_legal_action(
+            observation,
+            prefix,
+            {f"{prefix}:{combo.name}": score for score, combo in viable},
+        )
+        combo = by_action[chosen_action]
         self.queue.extend(combo.builder(toward))
+        self.queue_intent = chosen_action
+        self.queue_legal_actions = self._decision_legal_actions or (chosen_action,)
+        self.queue_behavior_probability = self._decision_probability
         self.offense_outcomes.begin(
             combo.name,
             outcome_context,
@@ -590,7 +681,6 @@ class SakuyaAdaptivePolicy:
         self.combo_target_hp = enemy.hp
         self.combo_confirm_deadline = observation.frame + 18
         self.attack_cooldown = 75
-        prefix = "punish" if punish else "combo"
         self.counts[f"{prefix}_attempts:{combo.name}"] += 1
         return self.queue.popleft(), f"{prefix}:{combo.name}"
 
@@ -680,7 +770,9 @@ class SakuyaAdaptivePolicy:
                         continue
                     if distance >= 80.0 and not _pattern_has_advancing_attack(pattern):
                         continue
-                    pattern_id = hashlib.sha256(pattern.encode("utf-8")).hexdigest()[:10]
+                    pattern_id = hashlib.sha256(pattern.encode("utf-8")).hexdigest()[
+                        :10
+                    ]
                     viable.append(
                         (score, str(signature), pattern, pattern_id, connections)
                     )
@@ -692,6 +784,9 @@ class SakuyaAdaptivePolicy:
             return None
         label = f"human:{signature}:{pattern_id}"
         self.queue.extend(frames)
+        self.queue_intent = f"human-punish:{signature}"
+        self.queue_legal_actions = (self.queue_intent,)
+        self.queue_behavior_probability = 1.0
         self.offense_outcomes.begin(
             label,
             context,
@@ -797,6 +892,9 @@ class SakuyaAdaptivePolicy:
         score, signature, pattern_id, pattern, connections, label, source = max(viable)
         frames = _demonstration_probe_frames(pattern, toward)
         self.queue.extend(frames)
+        self.queue_intent = f"{source}-probe:{signature}"
+        self.queue_legal_actions = (self.queue_intent,)
+        self.queue_behavior_probability = 1.0
         self.offense_outcomes.begin(
             label,
             context,
@@ -809,7 +907,9 @@ class SakuyaAdaptivePolicy:
         self.combo_target_hp = enemy.hp
         self.combo_confirm_deadline = observation.frame + min(16, len(frames) + 4)
         self.attack_cooldown = 90
-        counter_family = "human_probe_attempts" if source == "human-seed" else "self_probe_attempts"
+        counter_family = (
+            "human_probe_attempts" if source == "human-seed" else "self_probe_attempts"
+        )
         self.counts[f"{counter_family}:{signature}:{pattern_id}"] += 1
         self.last_human_demonstration = {
             "frame": observation.frame,
@@ -868,6 +968,11 @@ class SakuyaAdaptivePolicy:
         keys = _decode_normalized_chord(edge.chord, toward)
         self.queue.clear()
         self.queue.extend([set(keys)] * 2 + [set()] * 3)
+        self.queue_intent = (
+            f"learned-cancel:{edge.target_action}:{edge.target_sequence}"
+        )
+        self.queue_legal_actions = (self.queue_intent,)
+        self.queue_behavior_probability = 1.0
         label = f"cancel:{edge_id}"
         self.offense_outcomes.begin(
             label,
@@ -883,7 +988,10 @@ class SakuyaAdaptivePolicy:
         self.cancel_cooldown = 30
         self.counts[f"learned_cancel_attempts:{edge_id}"] += 1
         self.counts[f"learned_cancel_score_bucket:{int(score // 100)}"] += 1
-        return self.queue.popleft(), f"learned-cancel:{edge.target_action}:{edge.target_sequence}"
+        return (
+            self.queue.popleft(),
+            f"learned-cancel:{edge.target_action}:{edge.target_sequence}",
+        )
 
     def _safe_to_commit_skill(
         self,
@@ -892,6 +1000,7 @@ class SakuyaAdaptivePolicy:
         distance: float,
         commitment: float | None = None,
         startup: float | None = None,
+        record: bool = True,
     ) -> bool:
         """Reject casts whose startup/recovery window is already punishable."""
         me, enemy = observation.state.p1, observation.state.p2
@@ -907,13 +1016,16 @@ class SakuyaAdaptivePolicy:
             and self.last_assessment.punish_window >= required_startup
         )
         if 300 <= enemy.action_id < 700 and not learned_recovery_window:
-            self.counts[f"commit_reject_enemy_action:{label}"] += 1
+            if record:
+                self.counts[f"commit_reject_enemy_action:{label}"] += 1
             return False
         if learned_recovery_window:
-            self.counts[f"commit_allow_learned_recovery:{label}"] += 1
+            if record:
+                self.counts[f"commit_allow_learned_recovery:{label}"] += 1
         closing_speed = max(0.0, abs(enemy.velocity_x) + abs(me.velocity_x))
         if distance - closing_speed * min(horizon, 18) < 150.0:
-            self.counts[f"commit_reject_melee:{label}"] += 1
+            if record:
+                self.counts[f"commit_reject_melee:{label}"] += 1
             return False
         if not observation.enemy_projectiles:
             return True
@@ -930,7 +1042,8 @@ class SakuyaAdaptivePolicy:
             collision_margin=5.0,
         )[0]
         if not result.safe:
-            self.counts[f"commit_reject_projectile:{label}"] += 1
+            if record:
+                self.counts[f"commit_reject_projectile:{label}"] += 1
             return False
         return True
 
@@ -950,32 +1063,52 @@ class SakuyaAdaptivePolicy:
         punish_rate = punished / samples if samples else 0.0
         try:
             return ActionCandidate(
-                label, startup, commitment, SKILL_DAMAGE[label], 200,
-                250.0, 920.0, role, punish_rate,
+                label,
+                startup,
+                commitment,
+                SKILL_DAMAGE[label],
+                200,
+                250.0,
+                920.0,
+                role,
+                punish_rate,
             )
         except TypeError:
             return ActionCandidate(
-                label, startup, commitment, SKILL_DAMAGE[label], 200,
-                250.0, 920.0, role,
+                label,
+                startup,
+                commitment,
+                SKILL_DAMAGE[label],
+                200,
+                250.0,
+                920.0,
+                role,
             )
 
     def decide(self, observation: PolicyObservation) -> PolicyDecision:
+        # Candidate metadata belongs to this decision only. A branch that is
+        # already committed falls back to an exact singleton legal set.
+        self._decision_legal_actions = None
+        self._decision_probability = 1.0
         state = observation.state
         me, enemy = state.p1, state.p2
         # Guard/motion direction must follow the fighter's native facing. An
         # airborne cross-up can pass x before the engine flips facing; using
         # raw positions at that instant presses forward and drops the guard.
         toward = (
-            "right" if me.facing > 0 else "left"
-            if me.facing < 0 else
-            ("right" if me.x < enemy.x else "left")
+            "right"
+            if me.facing > 0
+            else "left"
+            if me.facing < 0
+            else ("right" if me.x < enemy.x else "left")
         )
         back = "left" if toward == "right" else "right"
         distance = abs(enemy.x - me.x)
         spirit = int(getattr(me, "spirit", 1000))
         previous_enemy_hp = (
             observation.previous_state.p2.hp
-            if observation.previous_state is not None else enemy.hp
+            if observation.previous_state is not None
+            else enemy.hp
         )
         if self.cancel_graph.observe_actor(
             frame=observation.frame,
@@ -1072,12 +1205,19 @@ class SakuyaAdaptivePolicy:
             me_hp=me.hp,
             spirit=spirit,
         )
-        enemy_attacking = bool(getattr(enemy, "attack_boxes", ())) or self.last_assessment.phase in {
-            "startup", "active", "unknown", "spell-danger"
+        enemy_attacking = bool(
+            getattr(enemy, "attack_boxes", ())
+        ) or self.last_assessment.phase in {
+            "startup",
+            "active",
+            "unknown",
+            "spell-danger",
         }
         enemy_attack_flags = int(getattr(enemy, "attack_flags", 0))
         me_in_hit_reaction = 50 <= me.action_id < 200
-        previous_me = observation.previous_state.p1 if observation.previous_state else None
+        previous_me = (
+            observation.previous_state.p1 if observation.previous_state else None
+        )
         if me_in_hit_reaction:
             # Block/hit stun is proof that the opponent's pressure is live.
             # Keep guard armed through short neutral gaps in multi-hit strings.
@@ -1104,10 +1244,10 @@ class SakuyaAdaptivePolicy:
             if (
                 300 <= enemy.action_id < 400
                 or (
-                    300 <= enemy.action_id < 600
-                    and learned_strike_geometry is not None
+                    300 <= enemy.action_id < 600 and learned_strike_geometry is not None
                 )
-            ) else None
+            )
+            else None
         )
 
         self.actions[me.action_id] += 1
@@ -1140,7 +1280,8 @@ class SakuyaAdaptivePolicy:
         took_damage = self.last_me_hp is not None and me.hp < self.last_me_hp
         previous_me_action = (
             observation.previous_state.p1.action_id
-            if observation.previous_state is not None else None
+            if observation.previous_state is not None
+            else None
         )
         learned_impact = self.projectile_envelopes.observe(
             observation.enemy_projectiles,
@@ -1160,7 +1301,9 @@ class SakuyaAdaptivePolicy:
             damage = self.last_me_hp - me.hp
             nearest_damage_projectile = min(
                 observation.enemy_projectiles,
-                key=lambda projectile: math.hypot(projectile.x - me.x, projectile.y - me.y),
+                key=lambda projectile: math.hypot(
+                    projectile.x - me.x, projectile.y - me.y
+                ),
                 default=None,
             )
             projectile_distance = (
@@ -1168,7 +1311,8 @@ class SakuyaAdaptivePolicy:
                     nearest_damage_projectile.x - me.x,
                     nearest_damage_projectile.y - me.y,
                 )
-                if nearest_damage_projectile is not None else math.inf
+                if nearest_damage_projectile is not None
+                else math.inf
             )
             self.counts["incoming_damage_events"] += 1
             self.counts["incoming_damage_total"] += damage
@@ -1228,7 +1372,9 @@ class SakuyaAdaptivePolicy:
             dx = projectile.x - player_x
             dy = projectile.y - player_y
             nearest = min(nearest, math.hypot(dx, dy))
-            moving_toward = dx * projectile.velocity_x < 0 or abs(projectile.velocity_x) < 0.2
+            moving_toward = (
+                dx * projectile.velocity_x < 0 or abs(projectile.velocity_x) < 0.2
+            )
             if abs(dx) < 260 and abs(dy) < 125 and moving_toward:
                 projectile_threat = True
                 airborne_threat |= projectile.y > me.y + 35
@@ -1250,21 +1396,87 @@ class SakuyaAdaptivePolicy:
                             center_offset_y=(me.y + 24.0) - player_y,
                         ),
                     ),
-                    ("backdash", _movement_candidate(-direction * 13.0, 0.0, graze_frames=8, startup_frames=4)),
-                    ("forward-dash", _movement_candidate(direction * 13.0, 0.0, graze_frames=8, startup_frames=4)),
-                    ("jump", _movement_candidate(0.0, 11.0, startup_frames=1, acceleration_y=-0.65)),
-                    ("jump-back", _movement_candidate(-direction * 5.0, 11.0, startup_frames=1, acceleration_y=-0.65)),
-                    ("superjump-back", _movement_candidate(-direction * 7.0, 13.0, graze_frames=8, startup_frames=3, acceleration_y=-0.65)),
-                    ("superjump-forward", _movement_candidate(direction * 7.0, 13.0, graze_frames=8, startup_frames=3, acceleration_y=-0.65)),
+                    (
+                        "backdash",
+                        _movement_candidate(
+                            -direction * 13.0, 0.0, graze_frames=8, startup_frames=4
+                        ),
+                    ),
+                    (
+                        "forward-dash",
+                        _movement_candidate(
+                            direction * 13.0, 0.0, graze_frames=8, startup_frames=4
+                        ),
+                    ),
+                    (
+                        "jump",
+                        _movement_candidate(
+                            0.0, 11.0, startup_frames=1, acceleration_y=-0.65
+                        ),
+                    ),
+                    (
+                        "jump-back",
+                        _movement_candidate(
+                            -direction * 5.0,
+                            11.0,
+                            startup_frames=1,
+                            acceleration_y=-0.65,
+                        ),
+                    ),
+                    (
+                        "superjump-back",
+                        _movement_candidate(
+                            -direction * 7.0,
+                            13.0,
+                            graze_frames=8,
+                            startup_frames=3,
+                            acceleration_y=-0.65,
+                        ),
+                    ),
+                    (
+                        "superjump-forward",
+                        _movement_candidate(
+                            direction * 7.0,
+                            13.0,
+                            graze_frames=8,
+                            startup_frames=3,
+                            acceleration_y=-0.65,
+                        ),
+                    ),
                 )
             else:
                 labeled_candidates = (
                     ("stay", _movement_candidate(0.0, 0.0)),
-                    ("airdash-back", _movement_candidate(-direction * 14.0, 0.0, graze_frames=7, startup_frames=4)),
-                    ("airdash-forward", _movement_candidate(direction * 14.0, 0.0, graze_frames=7, startup_frames=4)),
-                    ("flight-back", _movement_candidate(-direction * 10.0, 0.0, graze_frames=10, startup_frames=1)),
-                    ("flight-up", _movement_candidate(0.0, 9.0, graze_frames=10, startup_frames=1)),
-                    ("flight-down", _movement_candidate(0.0, -10.0, graze_frames=10, startup_frames=1)),
+                    (
+                        "airdash-back",
+                        _movement_candidate(
+                            -direction * 14.0, 0.0, graze_frames=7, startup_frames=4
+                        ),
+                    ),
+                    (
+                        "airdash-forward",
+                        _movement_candidate(
+                            direction * 14.0, 0.0, graze_frames=7, startup_frames=4
+                        ),
+                    ),
+                    (
+                        "flight-back",
+                        _movement_candidate(
+                            -direction * 10.0, 0.0, graze_frames=10, startup_frames=1
+                        ),
+                    ),
+                    (
+                        "flight-up",
+                        _movement_candidate(
+                            0.0, 9.0, graze_frames=10, startup_frames=1
+                        ),
+                    ),
+                    (
+                        "flight-down",
+                        _movement_candidate(
+                            0.0, -10.0, graze_frames=10, startup_frames=1
+                        ),
+                    ),
                 )
             labels = tuple(label for label, _candidate in labeled_candidates)
             candidates = tuple(candidate for _label, candidate in labeled_candidates)
@@ -1309,11 +1521,13 @@ class SakuyaAdaptivePolicy:
                 "predicted_melee_boxes": len(melee_hazards),
                 "predicted_melee_start": (
                     min(hazard.active_start_frame for hazard in melee_hazards)
-                    if melee_hazards else None
+                    if melee_hazards
+                    else None
                 ),
                 "predicted_melee_end": (
                     max(hazard.active_end_frame for hazard in melee_hazards)
-                    if melee_hazards else None
+                    if melee_hazards
+                    else None
                 ),
                 "player_half_width": player_half_width,
                 "player_half_height": player_half_height,
@@ -1339,6 +1553,8 @@ class SakuyaAdaptivePolicy:
             self.defense_responses.finish()
             active_defense = None
             self.defense_motion_issued = False
+            self.defense_legal_actions = None
+            self.defense_behavior_probability = 1.0
         if melee_signature is not None and active_defense is None:
             native_guard = _native_guard_response(enemy_attack_flags, "high_guard")
             other_guard = "low_guard" if native_guard == "high_guard" else "high_guard"
@@ -1359,12 +1575,37 @@ class SakuyaAdaptivePolicy:
                     defense_candidates.append("airdash_back")
                 if spirit >= 250 and geometry_allows("flight-up"):
                     defense_candidates.append("flight_up")
-            response = self.defense_responses.choose(
-                melee_signature, tuple(defense_candidates)
+            # Normalize native high/low requirements before exposing the legal
+            # set so aliases cannot make a logged candidate physically false.
+            normalized_candidates: list[str] = []
+            for candidate in defense_candidates:
+                normalized = _native_guard_response(enemy_attack_flags, candidate)
+                if normalized not in normalized_candidates:
+                    normalized_candidates.append(normalized)
+            preferred = self.defense_responses.choose(
+                melee_signature, tuple(normalized_candidates)
             )
+            row = self.defense_responses.table.get(melee_signature, {})
+            response_by_intent = {
+                _defense_intent(candidate): candidate
+                for candidate in normalized_candidates
+            }
+            chosen_intent = self._choose_legal_action(
+                observation,
+                "defense",
+                {
+                    intent: (160.0 if candidate == preferred else 0.0)
+                    - float(getattr(row.get(candidate), "loss", 0.0))
+                    for intent, candidate in response_by_intent.items()
+                },
+            )
+            response = response_by_intent[chosen_intent]
+            self.defense_legal_actions = self._decision_legal_actions
+            self.defense_behavior_probability = self._decision_probability
             prior_me = (
                 observation.previous_state.p1
-                if observation.previous_state is not None else me
+                if observation.previous_state is not None
+                else me
             )
             self.defense_responses.begin(
                 melee_signature,
@@ -1386,7 +1627,8 @@ class SakuyaAdaptivePolicy:
                 self.pending_skill_label = None
                 self.queue.clear()
                 self.active_skill_label = next(
-                    label for label, action in SKILL_ACTIONS.items()
+                    label
+                    for label, action in SKILL_ACTIONS.items()
                     if action == expected_action
                 )
                 self.active_skill_start_frame = observation.frame
@@ -1422,9 +1664,7 @@ class SakuyaAdaptivePolicy:
             self.evade_queue.clear()
             keys = {back} if projectile_threat or enemy_attacking else set()
             intent = "skill-commit-guard" if keys else "skill-commit"
-        elif melee_signature is not None and (
-            enemy_attacking or distance < 280.0
-        ):
+        elif melee_signature is not None and (enemy_attacking or distance < 280.0):
             # Defense-first: a strike startup invalidates any not-yet-active
             # motion or dodge macro. Facing-based guard takes priority over all
             # queued offense and prevents the first hit of a full chain.
@@ -1432,7 +1672,8 @@ class SakuyaAdaptivePolicy:
             self.combo_confirm_deadline = 0
             response = (
                 self.defense_responses.episode.response
-                if self.defense_responses.episode is not None else "high_guard"
+                if self.defense_responses.episode is not None
+                else "high_guard"
             )
             native_response = _native_guard_response(enemy_attack_flags, response)
             native_failed = _response_has_damage(
@@ -1472,28 +1713,45 @@ class SakuyaAdaptivePolicy:
                     distance=distance,
                 )
                 self.defense_motion_issued = False
+            response_intent = _defense_intent(response)
+            if (
+                self.defense_legal_actions is not None
+                and response_intent in self.defense_legal_actions
+            ):
+                self._decision_legal_actions = self.defense_legal_actions
+                self._decision_probability = self.defense_behavior_probability
             mark_applied = getattr(self.defense_responses, "mark_applied", None)
             if callable(mark_applied):
                 mark_applied()
             if response in {"backdash", "airdash_back"} and me.action_id < 50:
                 if not self.defense_motion_issued:
-                    self.evade_queue.extend(_dash_frames(back, hold_frames=8))
+                    keys = self._begin_evade_sequence(
+                        _dash_frames(back, hold_frames=8),
+                        f"learned-defense-{response}",
+                    )
                     self.defense_motion_issued = True
-                keys = self.evade_queue.popleft() if self.evade_queue else {back}
+                else:
+                    keys = self.evade_queue.popleft() if self.evade_queue else {back}
                 intent = f"learned-defense-{response}"
             elif response == "jump_back" and me.action_id < 50:
                 if not self.defense_motion_issued:
-                    self.evade_queue.extend(
-                        _jump_frames(toward, "back", hold_frames=8)
+                    keys = self._begin_evade_sequence(
+                        _jump_frames(toward, "back", hold_frames=8),
+                        "learned-defense-jump-back",
                     )
                     self.defense_motion_issued = True
-                keys = self.evade_queue.popleft() if self.evade_queue else {back}
+                else:
+                    keys = self.evade_queue.popleft() if self.evade_queue else {back}
                 intent = "learned-defense-jump-back"
             elif response == "flight_up" and me.action_id < 50:
                 if not self.defense_motion_issued:
-                    self.evade_queue.extend(_flight_frames({"up"}, hold_frames=8))
+                    keys = self._begin_evade_sequence(
+                        _flight_frames({"up"}, hold_frames=8),
+                        "learned-defense-flight-up",
+                    )
                     self.defense_motion_issued = True
-                keys = self.evade_queue.popleft() if self.evade_queue else {back}
+                else:
+                    keys = self.evade_queue.popleft() if self.evade_queue else {back}
                 intent = "learned-defense-flight-up"
             else:
                 self.evade_queue.clear()
@@ -1508,11 +1766,13 @@ class SakuyaAdaptivePolicy:
             self.queue.clear()
             response = (
                 self.defense_responses.episode.response
-                if self.defense_responses.episode is not None else "high_guard"
+                if self.defense_responses.episode is not None
+                else "high_guard"
             )
             signature = (
                 self.defense_responses.episode.signature
-                if self.defense_responses.episode is not None else ""
+                if self.defense_responses.episode is not None
+                else ""
             )
             native_response = _native_guard_response(enemy_attack_flags, response)
             response = _native_guard_response(
@@ -1526,8 +1786,14 @@ class SakuyaAdaptivePolicy:
             keys = {back, "down"} if low else {back}
             intent = "guard-chain-low" if low else "guard-chain-high"
         elif self.evade_queue:
+            self._decision_legal_actions = self.evade_legal_actions
+            self._decision_probability = self.evade_behavior_probability
             keys = self.evade_queue.popleft()
-            intent = "evade-sequence"
+            intent = self.evade_queue_intent or "evade-sequence"
+            if not self.evade_queue:
+                self.evade_queue_intent = None
+                self.evade_legal_actions = None
+                self.evade_behavior_probability = 1.0
         elif projectile_threat:
             self.queue.clear()
             self.combo_confirm_deadline = 0
@@ -1535,48 +1801,66 @@ class SakuyaAdaptivePolicy:
             # 623B is projectile-grazing anti-air, but it is not strike
             # invulnerable. Only attempt it against a high projectile with no
             # nearby active enemy; otherwise keep the robust guard fallback.
+            chosen_evade: str | None = None
             if (
-                evade_choice is not None
+                eligible
                 and self.evade_cooldown == 0
                 and distance > 190
                 and me.action_id < 50
             ):
+                action_scores = {"projectile-guard": 0.0}
+                action_scores.update(
+                    {
+                        f"projectile-evade:{label}": clearance
+                        for clearance, label in eligible
+                    }
+                )
+                chosen_action = self._choose_legal_action(
+                    observation, "projectile-response", action_scores
+                )
+                if chosen_action.startswith("projectile-evade:"):
+                    chosen_evade = chosen_action.split(":", 1)[1]
+            if chosen_evade is not None:
                 physical_back = "left" if toward == "right" else "right"
-                if evade_choice == "crouch":
+                if chosen_evade == "crouch":
                     keys = {"down"}
-                elif evade_choice in {"backdash", "airdash-back"}:
-                    self.evade_queue.extend(_dash_frames(physical_back))
-                    keys = self.evade_queue.popleft()
-                elif evade_choice in {"forward-dash", "airdash-forward"}:
-                    self.evade_queue.extend(_dash_frames(toward))
-                    keys = self.evade_queue.popleft()
-                elif evade_choice == "jump":
-                    self.evade_queue.extend(_jump_frames(toward))
-                    keys = self.evade_queue.popleft()
-                elif evade_choice == "superjump-back":
-                    self.evade_queue.extend(
-                        _jump_frames(toward, "back", super_jump=True)
+                elif chosen_evade in {"backdash", "airdash-back"}:
+                    keys = self._begin_evade_sequence(
+                        _dash_frames(physical_back), chosen_action
                     )
-                    keys = self.evade_queue.popleft()
-                elif evade_choice == "superjump-forward":
-                    self.evade_queue.extend(
-                        _jump_frames(toward, "toward", super_jump=True)
+                elif chosen_evade in {"forward-dash", "airdash-forward"}:
+                    keys = self._begin_evade_sequence(
+                        _dash_frames(toward), chosen_action
                     )
-                    keys = self.evade_queue.popleft()
-                elif evade_choice == "flight-back":
-                    self.evade_queue.extend(_flight_frames({physical_back}))
-                    keys = self.evade_queue.popleft()
-                elif evade_choice == "flight-up":
-                    self.evade_queue.extend(_flight_frames({"up"}))
-                    keys = self.evade_queue.popleft()
-                elif evade_choice == "flight-down":
-                    self.evade_queue.extend(_flight_frames({"down"}))
-                    keys = self.evade_queue.popleft()
+                elif chosen_evade == "jump":
+                    keys = self._begin_evade_sequence(
+                        _jump_frames(toward), chosen_action
+                    )
+                elif chosen_evade == "superjump-back":
+                    keys = self._begin_evade_sequence(
+                        _jump_frames(toward, "back", super_jump=True), chosen_action
+                    )
+                elif chosen_evade == "superjump-forward":
+                    keys = self._begin_evade_sequence(
+                        _jump_frames(toward, "toward", super_jump=True), chosen_action
+                    )
+                elif chosen_evade == "flight-back":
+                    keys = self._begin_evade_sequence(
+                        _flight_frames({physical_back}), chosen_action
+                    )
+                elif chosen_evade == "flight-up":
+                    keys = self._begin_evade_sequence(
+                        _flight_frames({"up"}), chosen_action
+                    )
+                elif chosen_evade == "flight-down":
+                    keys = self._begin_evade_sequence(
+                        _flight_frames({"down"}), chosen_action
+                    )
                 else:
                     keys = {back}
                 self.evade_cooldown = 30
-                self.counts[f"evade:{evade_choice}"] += 1
-                intent = f"projectile-evade:{evade_choice}"
+                self.counts[f"evade:{chosen_evade}"] += 1
+                intent = f"projectile-evade:{chosen_evade}"
             else:
                 keys = {back} if enemy.y >= 36 else {back, "down"}
                 intent = "projectile-guard"
@@ -1596,16 +1880,26 @@ class SakuyaAdaptivePolicy:
             keys = {back}
             intent = "ranged-startup-guard"
         elif self.queue:
+            self._decision_legal_actions = self.queue_legal_actions
+            self._decision_probability = self.queue_behavior_probability
             keys = self.queue.popleft()
-            intent = "sequence"
+            intent = self.queue_intent or "sequence"
+            if not self.queue:
+                self.queue_intent = None
+                self.queue_legal_actions = None
+                self.queue_behavior_probability = 1.0
         elif confirmed_punish and distance < 260 and me.action_id < 50:
             selected = self._start_human_demonstration(observation, toward)
             if selected is None and distance < 150:
                 selected = self._start_combo(observation, toward, punish=True)
             if selected is None:
-                keys, intent = ({toward}, "close-for-punish") if distance >= 80 else (
-                    {back},
-                    "punish-unavailable",
+                keys, intent = (
+                    ({toward}, "close-for-punish")
+                    if distance >= 80
+                    else (
+                        {back},
+                        "punish-unavailable",
+                    )
                 )
             else:
                 keys, intent = selected
@@ -1660,8 +1954,7 @@ class SakuyaAdaptivePolicy:
                 # Six frames for an Easy CPU decision plus a conservative
                 # twelve units/frame ground approach after that.
                 enemy_time_to_contact = (
-                    6.0 + max(0.0, distance - 105.0) / 12.0
-                    if closing else float("inf")
+                    6.0 + max(0.0, distance - 105.0) / 12.0 if closing else float("inf")
                 )
                 try:
                     tactical_context = TacticalContext(
@@ -1703,35 +1996,12 @@ class SakuyaAdaptivePolicy:
                     for item in ranked
                     if item.reason == "ok"
                 }
-                offline_scores: dict[str, float] = {}
-                if self.offline_policy.contexts:
-                    offline_context = live_distillation_context(
-                        difficulty=str(
-                            getattr(observation, "difficulty", "unknown")
-                        ),
-                        opponent=str(
-                            getattr(observation, "opponent_key", "unknown")
-                        ),
-                        state=observation.state,
-                        enemy_projectiles=tuple(observation.enemy_projectiles),
-                    )
-                    for item in ranked:
-                        if item.reason != "ok":
-                            continue
-                        offline = self.offline_policy.score(
-                            offline_context,
-                            f"space-control-{item.candidate.name}",
-                        )
-                        offline_scores[item.candidate.name] = (
-                            offline.adjustment if offline is not None else 0.0
-                        )
                 ranked = tuple(
                     sorted(
                         ranked,
                         key=lambda item: (
                             item.score
                             + 0.5 * learned_scores.get(item.candidate.name, 0.0)
-                            + 0.35 * offline_scores.get(item.candidate.name, 0.0)
                         ),
                         reverse=True,
                     )
@@ -1745,50 +2015,69 @@ class SakuyaAdaptivePolicy:
                         "startup": item.candidate.startup,
                         "commitment": item.candidate.commitment,
                         "learned_score": learned_scores.get(item.candidate.name),
-                        "offline_score": offline_scores.get(item.candidate.name),
                         "combined_score": (
                             item.score
                             + 0.5 * learned_scores.get(item.candidate.name, 0.0)
-                            + 0.35 * offline_scores.get(item.candidate.name, 0.0)
                         ),
                     }
                     for item in ranked
                 ]
-                chosen = next(
-                    (
-                        item for item in ranked
-                        if item.reason == "ok"
-                        and (
+                legal_items = [
+                    item
+                    for item in ranked
+                    if item.reason == "ok"
+                    and (
+                        self.counts.get(f"skill_punished:{item.candidate.name}", 0) * 2
+                        < max(
+                            1,
                             self.counts.get(
-                                f"skill_punished:{item.candidate.name}", 0
-                            )
-                            * 2
-                            < max(
-                                1,
-                                self.counts.get(
-                                    f"skill_duration_samples:{item.candidate.name}", 0
-                                ),
-                            )
-                            or self.last_assessment.phase in {"reaction", "recovery"}
+                                f"skill_duration_samples:{item.candidate.name}", 0
+                            ),
                         )
-                    ),
-                    None,
+                        or self.last_assessment.phase in {"reaction", "recovery"}
+                    )
+                    and self._safe_to_commit_skill(
+                        observation,
+                        item.candidate.name,
+                        distance,
+                        item.candidate.commitment,
+                        item.candidate.startup,
+                        record=False,
+                    )
+                ]
+                by_intent = {
+                    f"space-control-{item.candidate.name}": item for item in legal_items
+                }
+                choice = self._choose_legal_action(
+                    observation,
+                    "space-control",
+                    {
+                        "far-neutral-watch": 0.0,
+                        **{
+                            intent: item.score
+                            + 0.5 * learned_scores.get(item.candidate.name, 0.0)
+                            for intent, item in by_intent.items()
+                        },
+                    },
                 )
-                if chosen is None:
-                    keys = {back}
-                    intent = "no-safe-skill-candidate"
-                else:
+                chosen = by_intent.get(choice)
+                if chosen is not None:
                     label = chosen.candidate.name
                     motion, button, _role = SKILL_INPUT[label]
-                if chosen is not None and self._safe_to_commit_skill(
-                    observation,
-                    label,
-                    distance,
-                    chosen.candidate.commitment,
-                    chosen.candidate.startup,
-                ):
+                    # Record the one selected commitment gate in diagnostics;
+                    # candidate enumeration above used the pure form.
+                    assert self._safe_to_commit_skill(
+                        observation,
+                        label,
+                        distance,
+                        chosen.candidate.commitment,
+                        chosen.candidate.startup,
+                    )
                     self.skill_index += 1
                     self.queue.extend(build_motion_frames(motion, button, toward))
+                    self.queue_intent = f"space-control-{label}"
+                    self.queue_legal_actions = self._decision_legal_actions
+                    self.queue_behavior_probability = self._decision_probability
                     self.skill_cooldown = 105
                     self.pending_skill = 35
                     self.pending_skill_label = label
@@ -1804,22 +2093,40 @@ class SakuyaAdaptivePolicy:
                     )
                     keys = self.queue.popleft()
                     intent = f"space-control-{label}"
-                elif chosen is not None:
-                    keys = {back}
-                    intent = f"unsafe-skill-reject-{label}"
+                else:
+                    keys = set()
+                    intent = "far-neutral-watch"
             else:
-                keys = set()
-                intent = "far-neutral-watch"
+                intent = self._choose_legal_action(
+                    observation,
+                    "far-movement",
+                    {
+                        "far-neutral-watch": 30.0,
+                        "far-approach": 20.0 if distance > 520.0 else -25.0,
+                    },
+                )
+                keys = {toward} if intent == "far-approach" else set()
         elif distance > 92:
             if spirit < 300:
                 keys = {back}
                 intent = "spirit-recover"
             elif self.last_assessment.phase in {"reaction", "recovery"}:
-                keys = {toward}
-                intent = "close-during-advantage"
+                intent = self._choose_legal_action(
+                    observation,
+                    "advantage-movement",
+                    {"close-during-advantage": 80.0, "neutral-watch": 0.0},
+                )
+                keys = {toward} if intent == "close-during-advantage" else set()
             else:
-                keys = {back} if distance < 185.0 else set()
-                intent = "neutral-spacing" if keys else "neutral-watch"
+                intent = self._choose_legal_action(
+                    observation,
+                    "neutral-movement",
+                    {
+                        "neutral-spacing": 35.0 if distance < 185.0 else -10.0,
+                        "neutral-watch": 30.0 if distance >= 185.0 else 0.0,
+                    },
+                )
+                keys = {back} if intent == "neutral-spacing" else set()
         elif (
             self.attack_cooldown == 0
             and me.action_id < 50
@@ -1863,7 +2170,9 @@ class SakuyaAdaptivePolicy:
             max_me_hp=int(outcome.get("max_me_hp", 10000)),
         )
         self.defense_responses.finish()
-        self.counts[f"round_terminal:{'win' if won is True else 'loss' if won is False else 'draw'}"] += 1
+        self.counts[
+            f"round_terminal:{'win' if won is True else 'loss' if won is False else 'draw'}"
+        ] += 1
 
     def metrics(self) -> dict[str, object]:
         human_contexts = self.human_demonstrations.get("contexts", {})
@@ -1872,7 +2181,9 @@ class SakuyaAdaptivePolicy:
         return {
             "counts": dict(self.counts),
             "own_action_frames": {str(k): v for k, v in self.actions.most_common()},
-            "enemy_action_frames": {str(k): v for k, v in self.enemy_actions.most_common()},
+            "enemy_action_frames": {
+                str(k): v for k, v in self.enemy_actions.most_common()
+            },
             "queued_frames": len(self.queue),
             "evade_queued_frames": len(self.evade_queue),
             "hazard_backend": self.hazard.backend,
@@ -1926,11 +2237,13 @@ class SakuyaAdaptivePolicy:
             "own_action_model": self.own_action_model.metrics(),
             "tactical_scores": self.last_tactical_scores,
             "offline_policy": self.offline_policy.metrics(),
+            "coverage_explorer": self.coverage_explorer.metrics(),
             "performance": {
                 "hazard_calls": self.hazard_calls,
                 "hazard_average_us": (
                     self.hazard_total_ns / self.hazard_calls / 1000.0
-                    if self.hazard_calls else 0.0
+                    if self.hazard_calls
+                    else 0.0
                 ),
                 "hazard_max_us": self.hazard_max_ns / 1000.0,
             },

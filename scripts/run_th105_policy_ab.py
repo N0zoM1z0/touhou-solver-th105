@@ -173,6 +173,8 @@ def main() -> int:
                 str(args.rounds),
                 "--policy",
                 "adaptive",
+                "--exploration-rate",
+                "0",
                 "--timeout",
                 str(args.timeout),
             ]

@@ -9,9 +9,9 @@ from typing import Any, Protocol
 from .reward import basis_points
 
 
-TRANSITION_SCHEMA_VERSION = 1
+TRANSITION_SCHEMA_VERSION = 2
 FEATURE_SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 1
+ACTION_SCHEMA_VERSION = 2
 
 
 class TransitionWriter(Protocol):
@@ -130,11 +130,7 @@ class _ActiveOption:
 
 
 class OptionTransitionRecorder:
-    """Segment deterministic decisions on intent/policy-generation changes.
-
-    The current controller does not expose every native-gated candidate set.
-    Unknown legal sets are stored as null instead of inventing counterfactuals.
-    """
+    """Segment decisions on intent, legal-set, or policy-generation changes."""
 
     def __init__(
         self,
@@ -186,6 +182,15 @@ class OptionTransitionRecorder:
     def _keys_key(keys: object) -> str:
         return "+".join(sorted(str(key) for key in keys))
 
+    @staticmethod
+    def _legal_actions(decision: Any) -> tuple[str, ...] | None:
+        raw = getattr(decision, "legal_actions", None)
+        if not isinstance(raw, (tuple, list)):
+            return None
+        # Canonical ordering makes this both compact under gzip and stable as
+        # an option-boundary key.
+        return tuple(sorted({str(action) for action in raw}))
+
     def _append_keys(self, keys: object) -> None:
         if self.active is None:
             return
@@ -212,11 +217,7 @@ class OptionTransitionRecorder:
             self._new_episode()
         assert self.episode_id is not None
         me, enemy = state.p1, state.p2
-        legal_raw = getattr(decision, "legal_actions", None)
-        legal_actions = (
-            tuple(str(action) for action in legal_raw)
-            if isinstance(legal_raw, (tuple, list)) else None
-        )
+        legal_actions = self._legal_actions(decision)
         probability = float(getattr(decision, "behavior_probability", 1.0))
         if not 0.0 < probability <= 1.0:
             probability = 1.0
@@ -254,6 +255,7 @@ class OptionTransitionRecorder:
             self.active is not None
             and (
                 self.active.action != str(decision.intent)
+                or self.active.legal_actions != self._legal_actions(decision)
                 or self.active.policy_generation != policy_generation
             )
         )

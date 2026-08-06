@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from compare_th105_policy_bundles import compare_distilled
+from compare_th105_policy_bundles import _coverage_summary, compare_distilled
 from train_th105_zoo import _distilled_payload
 
 
@@ -28,6 +28,20 @@ def _record(episode: str, step: int, action: str) -> dict[str, object]:
 
 
 class OfflineZooTests(unittest.TestCase):
+    def test_coverage_summary_counts_model_counterfactual_rows(self) -> None:
+        summary = _coverage_summary(
+            {
+                "contexts": {
+                    "ctx": {
+                        "guard": {"support": 5, "factual_support": 5},
+                        "jump": {"support": 5, "factual_support": 1},
+                    }
+                }
+            }
+        )
+        self.assertEqual(summary["multi_action_contexts"], 1)
+        self.assertEqual(summary["counterfactual_context_actions"], 1)
+
     def test_distillation_uses_support_and_mean_predictions(self) -> None:
         records = [_record("a", 0, "236B"), _record("a", 1, "236B")]
         result = _distilled_payload(

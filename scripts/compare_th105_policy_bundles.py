@@ -44,6 +44,40 @@ def _top_actions(distilled: dict[str, object]) -> dict[str, str]:
     return result
 
 
+def _coverage_summary(distilled: dict[str, object]) -> dict[str, int | float]:
+    contexts = distilled.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return {
+            "contexts": 0,
+            "context_actions": 0,
+            "multi_action_contexts": 0,
+            "counterfactual_context_actions": 0,
+            "mean_actions_per_context": 0.0,
+        }
+    action_count = 0
+    multi = 0
+    counterfactual = 0
+    for actions in contexts.values():
+        if not isinstance(actions, dict):
+            continue
+        action_count += len(actions)
+        multi += len(actions) >= 2
+        for entry in actions.values():
+            if not isinstance(entry, dict):
+                continue
+            if int(entry.get("factual_support", entry.get("support", 0))) < int(
+                entry.get("support", 0)
+            ):
+                counterfactual += 1
+    return {
+        "contexts": len(contexts),
+        "context_actions": action_count,
+        "multi_action_contexts": multi,
+        "counterfactual_context_actions": counterfactual,
+        "mean_actions_per_context": action_count / len(contexts) if contexts else 0.0,
+    }
+
+
 def compare_distilled(
     left: dict[str, object], right: dict[str, object]
 ) -> dict[str, object]:
@@ -83,6 +117,7 @@ def main() -> int:
         summaries[name] = {
             "kind": manifest.get("kind"),
             "distillation": manifest.get("distillation"),
+            "candidate_coverage": _coverage_summary(distilled),
             "held_out": {
                 head: metadata.get("validation")
                 for head, metadata in heads.items()
