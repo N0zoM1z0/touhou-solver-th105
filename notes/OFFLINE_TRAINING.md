@@ -69,6 +69,49 @@ by retaining every terminal, damage, rare-action, and high-tail-loss transition
 while using stratified reservoir sampling for repetitive neutral states. This
 preserves unusual failures without storing hours of identical idle frames.
 
+## Outcome learning is separate from gameplay preference
+
+Damage dealt, self-damage, connection probability, spirit cost, punish
+probability, commitment time, downside quantiles, and terminal outcome are the
+learned targets. They are physical observations; none of them contains the
+agent's current offensive, defensive, or risk preference. The corpus, CPU model
+heads, and distilled runtime table therefore retain these components separately
+instead of replacing them with one scalar reward.
+
+Scalarization happens at action-selection time. The runtime combines predicted
+outcomes with a versioned `RewardConfig`, for example:
+
+```text
+damage_weight * damage
+- self_damage_weight * self_damage
+- tail_risk_weight * excess_downside
+- resource, whiff, punish, and commitment costs
++ terminal_weight * terminal_value
+```
+
+This boundary is a design contract:
+
+- changing gameplay weights re-scores the same online statistics and distilled
+  outcome table; it does not require new gameplay collection or outcome-model
+  training;
+- an A/B test changes one versioned reward profile while keeping the corpus,
+  model hashes, native gates, opponent/difficulty strata, and round allocation
+  fixed;
+- training loss, tree depth, regularization, calibration, and uncertainty are
+  model hyperparameters, not gameplay preference weights;
+- artifacts must expose outcome heads and support counts. A trainer must not
+  publish only a reward-weighted ranking if the underlying outcomes are
+  available;
+- native safety, resource, geometry, startup, and recovery gates remain outside
+  scalarization and cannot be weakened merely by changing a reward profile.
+
+A future fitted-Q or direct policy model is reward-dependent because its target
+already includes long-horizon scalar return. Such artifacts must declare their
+reward profile and be retrained or emitted once per profile. Prefer vector-valued
+Q/outcome heads or successor-feature-like representations when practical so
+several gameplay preferences can still share one expensive CPU training run.
+Regardless of model family, the raw transition corpus remains reusable.
+
 ## CPU-first training progression
 
 The first baseline is deliberately tabular and CPU-native:
@@ -211,5 +254,7 @@ reversible.
 
 Raw transition components and corpus manifests are permanent evidence. Scalar
 rewards, Q values, rankings, neural weights, and compiled policies are derived
-artifacts. A new reward or algorithm retrains from the same transition shards;
-it never rewrites old observations to resemble the new policy.
+artifacts. A new reward re-scores the current outcome model; it retrains only
+reward-dependent artifacts such as scalar Q values or direct policies. A new
+algorithm trains from the same transition shards and never rewrites old
+observations to resemble the new policy.

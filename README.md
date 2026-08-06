@@ -173,9 +173,14 @@ python scripts/train_th105_cpu.py \
 
 The trainer uses CPU-only categorical boosted trees for separate damage,
 self-damage/tail, spirit, punish, and terminal heads, then distills predictions
-into a compact context/action table. Training algorithm and runtime artifact are
-decoupled: native legality/hazard gates remain mandatory, while unknown or
-unsupported contexts fall back to the online contextual bandit.
+into a compact context/action table. Gameplay reward weights are applied only
+when the runtime ranks safe actions: changing the offense/defense/risk trade-off
+re-scores the same outcome artifact instead of requiring corpus recollection or
+outcome-model retraining. Training algorithm and runtime artifact are decoupled:
+native legality/hazard gates remain mandatory, while unknown or unsupported
+contexts fall back to the online contextual bandit. The versioning and A/B
+contract is documented in
+[`notes/OFFLINE_TRAINING.md`](notes/OFFLINE_TRAINING.md#outcome-learning-is-separate-from-gameplay-preference).
 
 Install a returned bundle only after its manifest, model hash, and exact game
 build pass validation:
