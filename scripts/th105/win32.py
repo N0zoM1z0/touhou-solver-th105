@@ -16,11 +16,22 @@ TH32CS_SNAPPROCESS = 0x00000002
 PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SYNCHRONIZE = 0x00100000
+CREATE_SUSPENDED = 0x00000004
+PAGE_EXECUTE_READWRITE = 0x40
 INFINITE = 0xFFFFFFFF
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 SW_RESTORE = 9
 SW_SHOWNOACTIVATE = 4
 STARTF_USESHOWWINDOW = 0x00000001
+
+# Exact-build WinMain evidence (th105c.exe SHA-256 in constants.py):
+#   00664D95  push 00040000h       ; WS_EX_APPWINDOW
+#   00664D9A  call CreateWindowExA
+# A suspended background launch changes only the immediate operand in the new
+# process to add WS_EX_NOACTIVATE. The executable on disk is never modified.
+BACKGROUND_EXSTYLE_ADDRESS = 0x00664D96
+BACKGROUND_EXSTYLE_ORIGINAL = struct.pack("<I", 0x00040000)
+BACKGROUND_EXSTYLE_PATCHED = struct.pack("<I", 0x08040000)
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -189,6 +200,34 @@ class Win32:
             ctypes.POINTER(PROCESS_INFORMATION),
         ]
         k.CreateProcessW.restype = wintypes.BOOL
+        k.VirtualProtectEx.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            ctypes.c_size_t,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        k.VirtualProtectEx.restype = wintypes.BOOL
+        k.WriteProcessMemory.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.LPCVOID,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        k.WriteProcessMemory.restype = wintypes.BOOL
+        k.FlushInstructionCache.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPCVOID,
+            ctypes.c_size_t,
+        ]
+        k.FlushInstructionCache.restype = wintypes.BOOL
+        k.ResumeThread.argtypes = [wintypes.HANDLE]
+        k.ResumeThread.restype = wintypes.DWORD
+        k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k.TerminateProcess.restype = wintypes.BOOL
+        k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k.WaitForSingleObject.restype = wintypes.DWORD
         k.CloseHandle.argtypes = [wintypes.HANDLE]
 
         u.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
@@ -310,8 +349,78 @@ class Win32:
             time.sleep(0.1)
         raise RuntimeError(f"could not focus PID {pid}; visible windows={last}")
 
-    def launch(self, exe_path: Path, *, activate: bool = True) -> int:
+    def _install_background_launch_patch(self, process: int) -> None:
+        address = BACKGROUND_EXSTYLE_ADDRESS
+        current = ctypes.create_string_buffer(len(BACKGROUND_EXSTYLE_ORIGINAL))
+        transferred = ctypes.c_size_t()
+        if not self.kernel32.ReadProcessMemory(
+            process,
+            address,
+            current,
+            len(current),
+            ctypes.byref(transferred),
+        ):
+            raise _win_error("ReadProcessMemory(background launch)")
+        observed = current.raw[: transferred.value]
+        if observed != BACKGROUND_EXSTYLE_ORIGINAL:
+            raise RuntimeError(
+                "background launch patch preimage mismatch at "
+                f"0x{address:08X}: {observed.hex()}"
+            )
+
+        old_protect = wintypes.DWORD()
+        if not self.kernel32.VirtualProtectEx(
+            process,
+            address,
+            len(BACKGROUND_EXSTYLE_PATCHED),
+            PAGE_EXECUTE_READWRITE,
+            ctypes.byref(old_protect),
+        ):
+            raise _win_error("VirtualProtectEx(background launch)")
+        try:
+            transferred = ctypes.c_size_t()
+            patch = ctypes.create_string_buffer(BACKGROUND_EXSTYLE_PATCHED)
+            if not self.kernel32.WriteProcessMemory(
+                process,
+                address,
+                patch,
+                len(BACKGROUND_EXSTYLE_PATCHED),
+                ctypes.byref(transferred),
+            ) or transferred.value != len(BACKGROUND_EXSTYLE_PATCHED):
+                raise _win_error("WriteProcessMemory(background launch)")
+            if not self.kernel32.FlushInstructionCache(
+                process, address, len(BACKGROUND_EXSTYLE_PATCHED)
+            ):
+                raise _win_error("FlushInstructionCache(background launch)")
+        finally:
+            restored = wintypes.DWORD()
+            if not self.kernel32.VirtualProtectEx(
+                process,
+                address,
+                len(BACKGROUND_EXSTYLE_PATCHED),
+                old_protect.value,
+                ctypes.byref(restored),
+            ):
+                raise _win_error("VirtualProtectEx(restore background launch)")
+
+    def launch(
+        self,
+        exe_path: Path,
+        *,
+        activate: bool = True,
+        prevent_activation: bool = False,
+    ) -> int:
         exe_path = exe_path.resolve()
+        if activate and prevent_activation:
+            raise ValueError(
+                "activation and activation prevention are mutually exclusive"
+            )
+        if prevent_activation:
+            observed_sha256 = sha256(exe_path)
+            if observed_sha256 != EXPECTED_EXE_SHA256:
+                raise RuntimeError(
+                    f"refusing background launch patch for SHA-256 {observed_sha256}"
+                )
         startup = STARTUPINFOW()
         startup.cb = ctypes.sizeof(startup)
         if not activate:
@@ -321,13 +430,14 @@ class Win32:
             startup.dwFlags |= STARTF_USESHOWWINDOW
             startup.wShowWindow = SW_SHOWNOACTIVATE
         info = PROCESS_INFORMATION()
+        creation_flags = CREATE_SUSPENDED if prevent_activation else 0
         if not self.kernel32.CreateProcessW(
             str(exe_path),
             None,
             None,
             None,
             False,
-            0,
+            creation_flags,
             None,
             str(exe_path.parent),
             ctypes.byref(startup),
@@ -335,6 +445,17 @@ class Win32:
         ):
             raise _win_error("CreateProcessW")
         try:
+            if prevent_activation:
+                try:
+                    self._install_background_launch_patch(info.hProcess)
+                    if self.kernel32.ResumeThread(info.hThread) == 0xFFFFFFFF:
+                        raise _win_error("ResumeThread(background launch)")
+                except Exception:
+                    # This handle is the exact process created above. Never
+                    # fall back to terminating by an ambiguous image name.
+                    self.kernel32.TerminateProcess(info.hProcess, 1)
+                    self.kernel32.WaitForSingleObject(info.hProcess, 5000)
+                    raise
             return int(info.dwProcessId)
         finally:
             self.kernel32.CloseHandle(info.hThread)

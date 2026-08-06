@@ -149,9 +149,14 @@ most the remainder of the current match.
 Learned observations are stored under separate opponent-and-difficulty keys. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Background mode is strict from
-process creation onward: Windows is asked to show TH105 without activation,
-the controller never calls `SetForegroundWindow`, and it fails closed before
-publishing input if TH105 unexpectedly becomes foreground. This permits a
+process creation onward: `auto-arcade --launch` creates the exact verified
+executable suspended and process-locally adds `WS_EX_NOACTIVATE` to its WinMain
+window style before resuming it. This four-byte launch patch is guarded by the
+supported SHA-256 and original-byte preimage; it never changes the executable
+on disk, and any failure terminates only the exact newly created PID. Windows
+is also asked to show TH105 without activation, the controller never calls
+`SetForegroundWindow`, and it fails closed before publishing input if TH105
+unexpectedly becomes foreground. This permits a
 separate process-local TH06 cave/controller to keep running without shared
 keyboard events or focus theft. Pass `--foreground-only` only when explicit
 TH105 focus/reacquisition is desired. Round-end and Arcade dialogue screens

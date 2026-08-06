@@ -112,7 +112,11 @@ def launch_target(
     if api.find_pids(TARGET_EXE):
         pid, identity = find_exact_target(api, exe)
         return pid, identity
-    pid = api.launch(exe, activate=activate)
+    pid = api.launch(
+        exe,
+        activate=activate,
+        prevent_activation=not activate,
+    )
     return pid, wait_exact_target(api, exe, pid, timeout)
 
 
