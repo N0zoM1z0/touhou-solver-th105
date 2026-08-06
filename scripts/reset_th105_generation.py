@@ -88,6 +88,7 @@ def main() -> int:
     generation = {
         "manifest_schema_version": 1,
         "training_generation": TRAINING_GENERATION,
+        "action_schema_version": ACTION_SCHEMA_VERSION,
         "started_at": started_at,
         "source_commit": args.source_commit,
         "dataset_repo": args.dataset_repo,
@@ -152,4 +153,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

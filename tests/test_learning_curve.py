@@ -1,15 +1,44 @@
 from __future__ import annotations
 
 import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.learning_curve import learning_curve_point
+from th105.learning_curve import learning_curve_point, load_generation_manifest
 
 
 class LearningCurveTests(unittest.TestCase):
+    def test_generation_manifest_requires_current_action_space(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "th105_generation.json").write_text(
+                json.dumps(
+                    {
+                        "training_generation": "autonomous-routes-v3",
+                        "action_schema_version": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_generation_manifest(runtime)["action_schema_version"], 3
+            )
+            (runtime / "th105_generation.json").write_text(
+                json.dumps(
+                    {
+                        "training_generation": "autonomous-routes-v3",
+                        "action_schema_version": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "incompatible"):
+                load_generation_manifest(runtime)
+
     def test_round_point_keeps_compact_autonomous_progress(self) -> None:
         point = learning_curve_point(
             session_id="session",
@@ -65,4 +94,3 @@ class LearningCurveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
