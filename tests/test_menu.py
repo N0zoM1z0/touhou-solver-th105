@@ -94,6 +94,13 @@ class CharacterKeyboard:
         self.slot += {"down": 4, "up": -4, "right": 1, "left": -1}[name]
 
 
+class ColumnCursorCharacterKeyboard(CharacterKeyboard):
+    def tap(self, name: str, hold_ms: int = 65, gap_ms: int = 170) -> None:
+        self.taps.append(name)
+        if name in {"left", "right"}:
+            self.slot += {"right": 1, "left": -1}[name]
+
+
 class NativeContractTests(unittest.TestCase):
     def test_supported_binary_contract_is_explicit(self) -> None:
         self.assertEqual(len(EXPECTED_EXE_SHA256), 64)
@@ -156,6 +163,18 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(keyboard.slot, CHARACTER_CURSOR_SLOTS.index("patchouli"))
         self.assertEqual(keyboard.taps, ["right", "right", "right", "down"])
         self.assertEqual(history[-1]["character"], "patchouli")
+
+    def test_accepts_native_column_cursor_on_patchouli_vertical_move(self) -> None:
+        keyboard = ColumnCursorCharacterKeyboard()
+        with patch(
+            "th105.menu.p1_character_selection",
+            side_effect=lambda _reader: keyboard.slot,
+        ):
+            history = select_p1_character(object(), keyboard, "patchouli")
+        self.assertEqual(keyboard.slot, 3)
+        self.assertEqual(keyboard.taps, ["right", "right", "right", "down"])
+        self.assertEqual(history[-1]["character"], "patchouli")
+        self.assertEqual(history[-1]["vertical_grid_move"], 1)
 
     def test_reach_main_menu_exits_arcade_character_select_with_cancel(self) -> None:
         reader = RecoveryReader(cancel_advances=True)

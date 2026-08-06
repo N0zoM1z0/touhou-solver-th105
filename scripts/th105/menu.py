@@ -268,6 +268,15 @@ def select_p1_character(
                 "character": CHARACTER_CURSOR_SLOTS[after],
             }
         )
+        # The scene's exposed cursor/selection pair tracks the column during a
+        # vertical grid move.  Marisa -> Patchouli therefore remains 3 -> 3
+        # even though the visible row changed.  Accept that native behaviour;
+        # scene transition plus the battle fighter vtable validate the final
+        # choice before any corpus is persisted.
+        if key in {"up", "down"} and after == current:
+            history[-1]["character"] = character
+            history[-1]["vertical_grid_move"] = 1
+            return history
         if after != expected:
             raise RuntimeError(
                 f"character-select {key} moved {current}->{after}, expected {expected}; "
