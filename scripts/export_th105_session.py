@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--target-rounds", required=True, type=int)
     parser.add_argument("--runtime-dir", type=Path, default=Path("runtime"))
     parser.add_argument("--baseline-dir", type=Path)
+    parser.add_argument("--final-models-dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     manifest = export_session(
@@ -43,6 +44,7 @@ def main() -> int:
         experiment_name=args.experiment_name,
         target_rounds=args.target_rounds,
         baseline_dir=args.baseline_dir,
+        final_models_dir=args.final_models_dir,
         source_commit=_source_commit(),
     )
     print(json.dumps(manifest["statistics"], ensure_ascii=False, sort_keys=True))

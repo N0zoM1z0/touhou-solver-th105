@@ -222,6 +222,7 @@ def export_session(
     experiment_name: str,
     target_rounds: int,
     baseline_dir: Path | None = None,
+    final_models_dir: Path | None = None,
     source_commit: str | None = None,
 ) -> dict[str, object]:
     if not session_id:
@@ -265,7 +266,10 @@ def export_session(
     _write_jsonl_gz(data_dir / "terminals.jsonl.gz", events)
     if baseline_dir is not None:
         _copy_models(baseline_dir, output_dir / "models" / "baseline")
-    _copy_models(runtime_dir, output_dir / "models" / "final")
+    _copy_models(
+        final_models_dir or runtime_dir,
+        output_dir / "models" / "final",
+    )
 
     actions = Counter(str(record.get("action", "")) for record in transitions)
     opponents = sorted({str(record.get("opponent", "")) for record in transitions})

@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.session_export import export_session
 
+from run_th105_policy_ab import controller_result
+
 
 def _transition(session: str, transition_id: str, step: int) -> dict[str, object]:
     return {
@@ -37,6 +39,17 @@ def _transition(session: str, transition_id: str, step: int) -> dict[str, object
 
 
 class SessionExportTests(unittest.TestCase):
+    def test_controller_result_accepts_windows_gbk_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "controller.json"
+            path.write_bytes(
+                json.dumps(
+                    {"identity": {"path": "东方绯想天"}, "fight": {"session_id": "s"}},
+                    ensure_ascii=False,
+                ).encode("gbk")
+            )
+            self.assertEqual(controller_result(path)["fight"]["session_id"], "s")
+
     def test_exports_only_requested_session_with_sanitized_events(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

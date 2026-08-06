@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -71,7 +72,17 @@ def stop_game() -> None:
 
 
 def controller_result(path: Path) -> dict[str, object]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    encoded = path.read_bytes()
+    value: object | None = None
+    errors: list[str] = []
+    for encoding in ("utf-8", "gbk"):
+        try:
+            value = json.loads(encoded.decode(encoding))
+            break
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            errors.append(f"{encoding}: {exc}")
+    if value is None:
+        raise ValueError("controller result decode failed: " + "; ".join(errors))
     if not isinstance(value, dict):
         raise ValueError("controller result is not an object")
     fight = value.get("fight")
@@ -167,16 +178,16 @@ def main() -> int:
             ]
             stdout_path = candidate_output / "controller.json"
             stderr_path = candidate_output / "controller.stderr.log"
-            with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-                "w", encoding="utf-8"
-            ) as stderr:
+            child_environment = os.environ.copy()
+            child_environment["PYTHONIOENCODING"] = "utf-8"
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
                 completed = subprocess.run(
                     command,
                     cwd=repository,
                     stdout=stdout,
                     stderr=stderr,
                     check=False,
-                    text=True,
+                    env=child_environment,
                 )
             ended_at = time.time()
             stop_game()
@@ -189,6 +200,10 @@ def main() -> int:
                     f"{candidate} controller exited with {completed.returncode}"
                 )
 
+            # Keep the learned checkpoint even if result decoding or export
+            # fails. This makes cross-platform orchestration failures resumable
+            # without replaying an expensive physical screen.
+            copy_models(runtime, candidate_output / "final-models-recovery")
             result = controller_result(stdout_path)
             fight = result["fight"]
             assert isinstance(fight, dict)
@@ -202,6 +217,7 @@ def main() -> int:
                 experiment_name=f"lunatic-policy-ab-{candidate}",
                 target_rounds=args.rounds,
                 baseline_dir=baseline,
+                final_models_dir=candidate_output / "final-models-recovery",
             )
             run = {
                 "candidate": candidate,
