@@ -104,7 +104,26 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(GAME_MODE_PRACTICE, 8)
 
     def test_sakuya_roster_contract(self) -> None:
-        self.assertEqual(CHARACTER_CURSOR_SLOTS[0:3], ("reimu", "sakuya", "youmu"))
+        self.assertEqual(
+            CHARACTER_CURSOR_SLOTS,
+            (
+                "reimu",
+                "sakuya",
+                "youmu",
+                "marisa",
+                "alice",
+                "remilia",
+                "yuyuko",
+                "patchouli",
+                "yukari",
+                "reisen",
+                "aya",
+                "suika",
+                "komachi",
+                "iku",
+                "tenshi",
+            ),
+        )
         self.assertEqual(SELECT_P1_CURSOR_OFFSET, 0x10C)
         self.assertEqual(SELECT_P1_CHARACTER_OFFSET, 0x110)
         self.assertEqual(SELECT_P2_CURSOR_OFFSET, 0x134)

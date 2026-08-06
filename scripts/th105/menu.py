@@ -36,12 +36,12 @@ CHARACTER_CURSOR_SLOTS = (
     "remilia",
     "yuyuko",
     "patchouli",
-    "suika",
+    "yukari",
     "reisen",
     "aya",
-    "iku",
+    "suika",
     "komachi",
-    "yukari",
+    "iku",
     "tenshi",
 )
 CHARACTERS = CHARACTER_CURSOR_SLOTS
@@ -262,7 +262,8 @@ def select_p1_character(
         )
         if after != expected:
             raise RuntimeError(
-                f"character-select {key} moved {current}->{after}, expected {expected}"
+                f"character-select {key} moved {current}->{after}, expected {expected}; "
+                f"target character {character!r} may still be locked"
             )
     raise RuntimeError(f"failed to select {character} within one roster cycle")
 
