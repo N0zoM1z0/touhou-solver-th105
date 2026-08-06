@@ -41,6 +41,25 @@ class AgentParserTests(unittest.TestCase):
         )
         self.assertEqual(args.cycle_round_quotas, (1, 3, 7, 11))
 
+    def test_fixed_difficulty_accepts_a_positive_round_limit(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "auto-arcade",
+                "--difficulty",
+                "lunatic",
+                "--continuous",
+                "--round-limit",
+                "30",
+            ]
+        )
+        self.assertEqual(args.round_limit, 30)
+
+    def test_round_limit_rejects_zero(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                ["auto-arcade", "--round-limit", "0"]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

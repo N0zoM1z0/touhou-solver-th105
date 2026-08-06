@@ -506,6 +506,8 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 )
             )
         if args.battle_seconds > 0 or args.continuous:
+            if args.round_limit is not None and args.policy != "adaptive":
+                raise ValueError("round limits require the adaptive policy")
             deadline = (
                 float("inf")
                 if args.continuous
@@ -513,6 +515,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
             )
             encounters: list[dict[str, object]] = []
             transitions: list[dict[str, int | str]] = []
+            completed_session_rounds = 0
             last_scene = scene_id(reader)
             while time.perf_counter() < deadline:
                 if args.foreground_only and api.foreground_pid() != pid:
@@ -531,6 +534,18 @@ def auto_arcade(args: argparse.Namespace) -> int:
                     remaining = max(0.05, deadline - time.perf_counter())
                     try:
                         if args.policy == "adaptive":
+                            round_targets: list[int] = []
+                            if args.difficulty == "cycle":
+                                round_targets.append(
+                                    max(1, fixed_cycle.remaining_rounds)
+                                )
+                            if args.round_limit is not None:
+                                round_targets.append(
+                                    max(
+                                        1,
+                                        args.round_limit - completed_session_rounds,
+                                    )
+                                )
                             encounter = run_adaptive_fight(
                                 reader,
                                 keyboard,
@@ -545,8 +560,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                                     str(identity.get("sha256", "")) or None
                                 ),
                                 rounds_until_rotation=(
-                                    max(1, fixed_cycle.remaining_rounds)
-                                    if args.difficulty == "cycle" else None
+                                    min(round_targets) if round_targets else None
                                 ),
                             )
                         else:
@@ -578,6 +592,12 @@ def auto_arcade(args: argparse.Namespace) -> int:
                         )
                         continue
                     encounters.append(dict(encounter))
+                    encounter_rounds = (
+                        int(encounter.get("round_wins", 0))
+                        + int(encounter.get("round_losses", 0))
+                        + int(encounter.get("round_draws", 0))
+                    )
+                    completed_session_rounds += encounter_rounds
                     curriculum.record(
                         wins=int(encounter.get("round_wins", 0)),
                         losses=int(encounter.get("round_losses", 0)),
@@ -589,6 +609,20 @@ def auto_arcade(args: argparse.Namespace) -> int:
                             losses=int(encounter.get("round_losses", 0)),
                             draws=int(encounter.get("round_draws", 0)),
                         )
+                    if (
+                        args.round_limit is not None
+                        and completed_session_rounds >= args.round_limit
+                    ):
+                        transitions.append(
+                            {
+                                "from": current,
+                                "to": scene_id(reader),
+                                "event": "round-limit-complete",
+                                "completed_rounds": completed_session_rounds,
+                                "round_limit": args.round_limit,
+                            }
+                        )
+                        break
                     continue
                 keyboard.release_all(require_foreground=args.foreground_only)
                 if current == 6:
@@ -674,6 +708,8 @@ def auto_arcade(args: argparse.Namespace) -> int:
                 "transitions": transitions,
                 "requested_seconds": args.battle_seconds,
                 "continuous": args.continuous,
+                "round_limit": args.round_limit,
+                "completed_session_rounds": completed_session_rounds,
                 "difficulty_mode": args.difficulty,
                 "active_difficulty": active_difficulty,
                 "curriculum": curriculum.status(),
@@ -812,6 +848,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--continuous",
         action="store_true",
         help="keep starting Arcade runs and learning until interrupted",
+    )
+    p.add_argument(
+        "--round-limit",
+        type=positive_int,
+        help=(
+            "stop cleanly at the first complete Arena match boundary at or "
+            "after this many native terminal rounds"
+        ),
     )
     p.add_argument("--frame-hz", type=float, default=60.0)
     p.add_argument("--policy", choices=("adaptive", "bootstrap"), default="adaptive")
