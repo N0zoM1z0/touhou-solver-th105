@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
 import time
 import uuid
@@ -500,6 +501,7 @@ def run_adaptive_fight(
     opponent_key = f"{base_opponent_key}@{difficulty.casefold()}"
     prior_offline_policy: dict[str, object] = {}
     offline_artifact_error: str | None = None
+    offline_artifact_sha256: str | None = None
     if telemetry_path is not None:
         offline_path = telemetry_path.with_name("th105_offline_policy.json")
         if offline_path.is_file():
@@ -512,6 +514,9 @@ def run_adaptive_fight(
                 loaded_offline = json.loads(offline_path.read_text(encoding="utf-8"))
                 if isinstance(loaded_offline, dict):
                     prior_offline_policy = loaded_offline
+                    offline_artifact_sha256 = hashlib.sha256(
+                        offline_path.read_bytes()
+                    ).hexdigest()
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 offline_artifact_error = str(exc)[:160]
     # Parse the growing JSON corpus once per encounter, then select all model
@@ -572,6 +577,7 @@ def run_adaptive_fight(
             opponent=opponent_key,
             difficulty=difficulty,
             game_build_sha256=game_build_sha256,
+            offline_policy_sha256=offline_artifact_sha256,
         )
         if telemetry_path is not None else None
     )
@@ -665,6 +671,7 @@ def run_adaptive_fight(
             ),
             "offline_artifact": {
                 "loaded": bool(prior_offline_policy),
+                "sha256": offline_artifact_sha256,
                 "error": offline_artifact_error,
             },
         },

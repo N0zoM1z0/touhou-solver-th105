@@ -144,12 +144,14 @@ class OptionTransitionRecorder:
         opponent: str,
         difficulty: str,
         game_build_sha256: str | None = None,
+        offline_policy_sha256: str | None = None,
     ) -> None:
         self.writer = writer
         self.session_id = session_id
         self.opponent = opponent
         self.difficulty = difficulty
         self.game_build_sha256 = game_build_sha256
+        self.offline_policy_sha256 = offline_policy_sha256
         self.episode_id: str | None = None
         self.step = 0
         self.active: _ActiveOption | None = None
@@ -311,6 +313,7 @@ class OptionTransitionRecorder:
                 "opponent": self.opponent,
                 "difficulty": self.difficulty,
                 "game_build_sha256": self.game_build_sha256,
+                "offline_policy_sha256": self.offline_policy_sha256,
                 "policy_generation": option.policy_generation,
                 "policy_sha256": option.policy_sha256,
                 "boundary": "intent-change-v1",

@@ -133,6 +133,11 @@ def _sanitize_session_events(
                     "session_id": session_id,
                     "difficulty": difficulty,
                     "opponent": record.get("opponent"),
+                    "offline_policy_sha256": (
+                        record.get("offline_artifact", {}).get("sha256")
+                        if isinstance(record.get("offline_artifact"), dict)
+                        else None
+                    ),
                 }
             )
         elif event == "round-terminal" and difficulty in difficulties:
@@ -298,6 +303,13 @@ def export_session(
         ),
         "policy_sha256": sorted(
             {str(record.get("policy_sha256")) for record in transitions if record.get("policy_sha256")}
+        ),
+        "offline_policy_sha256": sorted(
+            {
+                str(record.get("offline_policy_sha256"))
+                for record in transitions
+                if record.get("offline_policy_sha256")
+            }
         ),
         "reward": asdict(DEFAULT_REWARD),
         "statistics": {

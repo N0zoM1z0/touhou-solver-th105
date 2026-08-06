@@ -63,6 +63,7 @@ class OptionTransitionRecorderTests(unittest.TestCase):
             session_id="session",
             opponent="0x5678@hard",
             difficulty="hard",
+            offline_policy_sha256="c" * 64,
         )
 
     def test_intent_boundary_records_raw_outcome_and_rle_keys(self) -> None:
@@ -89,6 +90,7 @@ class OptionTransitionRecorderTests(unittest.TestCase):
         self.assertEqual(row["outcome"]["spirit_cost_bp"], 1000)
         self.assertIsNone(row["legal_actions"])
         self.assertFalse(row["legal_actions_known"])
+        self.assertEqual(row["offline_policy_sha256"], "c" * 64)
 
     def test_terminal_closes_episode_and_next_observation_gets_new_id(self) -> None:
         writer = MemoryWriter()

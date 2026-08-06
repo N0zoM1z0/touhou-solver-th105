@@ -284,6 +284,10 @@ loads it at the next encounter boundary. Initially it only blends supported
 offline outcomes into already-safe skill ranking; it cannot create a legal
 action or bypass native hazard, range, resource, startup, or recovery gates.
 
+Every option transition and sanitized encounter summary records the loaded
+offline-policy SHA-256. Physical A/B results therefore remain attributable even
+when several distilled artifacts are installed into the same runtime path.
+
 ### Learning from human Sakuya play
 
 Stop `auto-arcade`, leave the exact supported game running, then start the

@@ -25,6 +25,7 @@ def _transition(session: str, transition_id: str, step: int) -> dict[str, object
         "difficulty": "lunatic",
         "game_build_sha256": "a" * 64,
         "policy_sha256": "b" * 64,
+        "offline_policy_sha256": "d" * 64,
         "state": {},
         "legal_actions": None,
         "legal_actions_known": False,
@@ -98,6 +99,7 @@ class SessionExportTests(unittest.TestCase):
             )
             self.assertEqual(manifest["statistics"]["transitions"], 2)
             self.assertEqual(manifest["statistics"]["terminal_rounds"], 1)
+            self.assertEqual(manifest["offline_policy_sha256"], ["d" * 64])
             with gzip.open(
                 output / "data" / "transitions.jsonl.gz", "rt", encoding="utf-8"
             ) as handle:
