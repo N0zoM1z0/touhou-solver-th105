@@ -285,6 +285,32 @@ def reach_main_menu(
             # release must precede scene 2 or the same press can select Story.
             keyboard.tap("z", hold_ms=35, gap_ms=500)
             history.append({"key": "z", "before": current, "after": scene_id(reader)})
+        elif current == SCENE_SELECT and game_mode(reader) == GAME_MODE_ARCADE:
+            # A bounded controller can stop at the Arena post-match dialogue or
+            # result screen, both of which share scene 3 with character select.
+            # Cancel first: on character select this safely returns to the main
+            # menu. If scene 3 remains, one confirm advances dialogue; the next
+            # cancel can then leave the result/selection screen.
+            keyboard.tap("x", hold_ms=60, gap_ms=500)
+            after_cancel = scene_id(reader)
+            history.append(
+                {
+                    "key": "x",
+                    "before": current,
+                    "after": after_cancel,
+                    "event": "recover-arcade-exit",
+                }
+            )
+            if after_cancel == SCENE_SELECT:
+                keyboard.tap("z", hold_ms=35, gap_ms=500)
+                history.append(
+                    {
+                        "key": "z",
+                        "before": after_cancel,
+                        "after": scene_id(reader),
+                        "event": "recover-arcade-dialogue",
+                    }
+                )
         else:
             # Initial engine/controller construction can expose a transient
             # scene before the opening scene. Do not inject into unknown menus.

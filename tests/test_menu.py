@@ -28,6 +28,7 @@ from th105.menu import (
     SELECT_P2_CURSOR_OFFSET,
     character_name,
     configure_cpu_difficulty,
+    reach_main_menu,
 )
 
 
@@ -52,6 +53,34 @@ class DifficultyKeyboard:
             self.reader.difficulty = (self.reader.difficulty + 1) % 4
         elif name == "left":
             self.reader.difficulty = (self.reader.difficulty - 1) % 4
+
+
+class RecoveryReader:
+    def __init__(self, *, cancel_advances: bool) -> None:
+        self.scene = SCENE_SELECT
+        self.cancel_advances = cancel_advances
+        self.taps = 0
+
+    def u32(self, address: int) -> int:
+        if address == ADDR_CURRENT_ENGINE_SCENE:
+            return self.scene
+        if address == ADDR_GAME_MODE:
+            return GAME_MODE_ARCADE
+        raise AssertionError(f"unexpected read {address:#x}")
+
+
+class RecoveryKeyboard:
+    def __init__(self, reader: RecoveryReader) -> None:
+        self.reader = reader
+        self.taps: list[str] = []
+
+    def tap(self, name: str, hold_ms: int = 65, gap_ms: int = 170) -> None:
+        self.taps.append(name)
+        self.reader.taps += 1
+        if name == "x" and (
+            self.reader.cancel_advances or self.reader.taps >= 3
+        ):
+            self.reader.scene = SCENE_MAIN_MENU
 
 
 class NativeContractTests(unittest.TestCase):
@@ -86,6 +115,25 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(reader.difficulty, 3)
         self.assertEqual(keyboard.taps, ["z", "left", "x"])
         self.assertEqual(history[-2]["difficulty"], "lunatic")
+
+    def test_reach_main_menu_exits_arcade_character_select_with_cancel(self) -> None:
+        reader = RecoveryReader(cancel_advances=True)
+        keyboard = RecoveryKeyboard(reader)
+        with patch("th105.menu.main_menu_selection", return_value=1):
+            history = reach_main_menu(reader, keyboard, timeout=0.1)
+        self.assertEqual(keyboard.taps, ["x"])
+        self.assertEqual(history[-1]["event"], "recover-arcade-exit")
+
+    def test_reach_main_menu_advances_stale_arcade_dialogue_then_exits(self) -> None:
+        reader = RecoveryReader(cancel_advances=False)
+        keyboard = RecoveryKeyboard(reader)
+        with patch("th105.menu.main_menu_selection", return_value=1):
+            history = reach_main_menu(reader, keyboard, timeout=0.1)
+        self.assertEqual(keyboard.taps, ["x", "z", "x"])
+        self.assertEqual(
+            [entry["event"] for entry in history],
+            ["recover-arcade-exit", "recover-arcade-dialogue", "recover-arcade-exit"],
+        )
 
 
 if __name__ == "__main__":
