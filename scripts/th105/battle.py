@@ -564,6 +564,7 @@ def run_adaptive_fight(
                 telemetry_path.with_name("th105_transitions.jsonl"),
                 rotate_bytes=16 * 1024 * 1024,
                 backups=8,
+                archive_dir=telemetry_path.parent / "corpus_archive",
             ),
             session_id=session_id or uuid.uuid4().hex,
             opponent=opponent_key,

@@ -179,8 +179,11 @@ manifest and output contract and remain CPU-only.
 ## Session export and Hub layout
 
 `scripts/export_th105_session.py` extracts one controller `session_id` across
-the bounded current JSONL and gzip rotations, deduplicates transition IDs, and
-emits deterministic gzip files. It exports sanitized terminal summaries rather
+the immutable content-addressed corpus archive, bounded current JSONL, and gzip
+rotations, deduplicates transition IDs, and emits deterministic gzip files.
+`scripts/archive_th105_corpus.py` preserves each compressed transition rotation
+without pausing gameplay; future controllers also archive an oldest shard
+synchronously before bounded telemetry evicts it. It exports sanitized terminal summaries rather
 than raw live telemetry, which deliberately excludes plugin paths and large
 frame snapshots. Baseline/final model files, game/policy/schema hashes, reward
 weights, action coverage, and privacy assertions are recorded in `manifest.json`.

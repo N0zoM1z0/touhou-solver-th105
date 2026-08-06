@@ -37,6 +37,24 @@ class BoundedTelemetryTests(unittest.TestCase):
             self.assertTrue(Path(f"{path}.2.gz").is_file())
             self.assertFalse(Path(f"{path}.3.gz").exists())
 
+    def test_oldest_backup_is_content_addressed_before_discard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "live.jsonl"
+            archive = root / "archive"
+            for generation in range(3):
+                path.write_text(str(generation) * 20, encoding="utf-8")
+                BoundedJsonlWriter(
+                    path,
+                    rotate_bytes=10,
+                    backups=2,
+                    archive_dir=archive,
+                )
+            shards = list(archive.glob("live.jsonl.*.gz"))
+            self.assertEqual(len(shards), 1)
+            with gzip.open(shards[0], "rt", encoding="utf-8") as stream:
+                self.assertEqual(stream.read(), "0" * 20)
+
     def test_write_many_uses_the_same_jsonl_encoding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "live.jsonl"

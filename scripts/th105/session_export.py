@@ -31,7 +31,12 @@ SENSITIVE_FRAGMENTS = (
 
 
 def jsonl_family(path: Path) -> tuple[Path, ...]:
-    """Return bounded JSONL shards in oldest-to-newest order."""
+    """Return archived and bounded JSONL shards in oldest-to-newest order."""
+    archive_dir = path.parent / "corpus_archive"
+    archives = sorted(
+        archive_dir.glob(f"{path.name}.*.gz"),
+        key=lambda candidate: (candidate.stat().st_mtime_ns, candidate.name),
+    ) if archive_dir.is_dir() else []
     backups: list[tuple[int, Path]] = []
     for candidate in path.parent.glob(f"{path.name}.*.gz"):
         try:
@@ -39,7 +44,7 @@ def jsonl_family(path: Path) -> tuple[Path, ...]:
         except ValueError:
             continue
         backups.append((index, candidate))
-    ordered = [candidate for _index, candidate in sorted(backups, reverse=True)]
+    ordered = archives + [candidate for _index, candidate in sorted(backups, reverse=True)]
     if path.is_file():
         ordered.append(path)
     return tuple(ordered)

@@ -161,6 +161,9 @@ python scripts/export_th105_session.py \
 The export contains gzip JSONL transitions, sanitized terminal summaries,
 baseline/final compact models, a dataset card, independent schema/reward
 versions, and SHA-256 hashes. It rejects credentials and local filesystem paths.
+For indefinite collection, run `scripts/archive_th105_corpus.py`; it copies
+completed gzip rotations into `runtime/corpus_archive` under decompressed-content
+hashes, so bounded live telemetry cannot discard offline training evidence.
 On a CPU training server, install `requirements-cpu-train.txt` and train the
 first multi-head outcome model with:
 

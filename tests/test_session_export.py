@@ -41,9 +41,13 @@ class SessionExportTests(unittest.TestCase):
             root = Path(temporary)
             runtime = root / "runtime"
             runtime.mkdir()
+            archive = runtime / "corpus_archive"
+            archive.mkdir()
             session = "session-a"
             with gzip.open(
-                runtime / "th105_transitions.jsonl.1.gz", "wt", encoding="utf-8"
+                archive / ("th105_transitions.jsonl." + "d" * 64 + ".gz"),
+                "wt",
+                encoding="utf-8",
             ) as handle:
                 handle.write(json.dumps(_transition("other", "other:0", 0)) + "\n")
                 handle.write(json.dumps(_transition(session, "episode-a:0", 0)) + "\n")
