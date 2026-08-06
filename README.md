@@ -150,8 +150,11 @@ Learned observations are stored under separate opponent-and-difficulty keys. The
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
 background while another window has focus. Background mode is strict from
 process creation onward: `auto-arcade --launch` creates the exact verified
-executable suspended and process-locally adds `WS_EX_NOACTIVATE` to its WinMain
-window style before resuming it. This four-byte launch patch is guarded by the
+executable suspended and process-locally replaces `WS_EX_APPWINDOW` with
+`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` in its WinMain window style before
+resuming it. This keeps TH105 out of normal taskbar/Alt-Tab/fallback activation
+candidates when another game recreates its foreground window. The four-byte
+launch patch is guarded by the
 supported SHA-256 and original-byte preimage; it never changes the executable
 on disk, and any failure terminates only the exact newly created PID. Windows
 is also asked to show TH105 without activation, the controller never calls
