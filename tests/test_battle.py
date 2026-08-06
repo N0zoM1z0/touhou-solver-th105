@@ -117,11 +117,12 @@ class BootstrapBattleTests(unittest.TestCase):
         self.assertEqual(seeded["__reward__"]["rounds"]["rounds"], 0)
         self.assertEqual(original["__reward__"]["rounds"]["rounds"], 3)
 
-    def test_round_end_confirm_uses_sparse_z_for_arena_dialogue(self) -> None:
-        self.assertEqual(round_end_confirm_keys(0), {"z"})
+    def test_round_end_confirm_alternates_dialogue_and_result_keys(self) -> None:
+        self.assertEqual(round_end_confirm_keys(0), {"x"})
         self.assertEqual(round_end_confirm_keys(1), set())
         self.assertEqual(round_end_confirm_keys(29), set())
         self.assertEqual(round_end_confirm_keys(30), {"z"})
+        self.assertEqual(round_end_confirm_keys(60), {"x"})
 
     def test_pending_rotation_alternates_dialogue_confirm_and_result_back(self) -> None:
         self.assertEqual(

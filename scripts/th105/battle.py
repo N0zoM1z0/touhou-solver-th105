@@ -159,19 +159,19 @@ def cold_start_offense_prior(state: object) -> dict[str, object]:
 def round_end_confirm_keys(
     round_end_frames: int, *, rotation_requested: bool = False
 ) -> set[str]:
-    """Advance Arena dialogue, then leave its result screen when rotating.
+    """Advance Arena dialogue, then leave its result screen.
 
     Scene 5 remains active for both states: dialogue accepts Z while the final
-    result accepts X.  When rotating, cancel comes first so a victory result
-    cannot consume Z and immediately continue to another opponent. Dialogue
-    ignores that X, accepts the following Z, then the next X leaves its result.
+    result accepts X. Cancel comes first so an already-visible result cannot
+    consume Z and immediately continue to another opponent. Dialogue ignores
+    that X, accepts the following Z, then the next X leaves its result. This is
+    also required for a controller cold-attached to an unknown post-round phase.
     """
+    del rotation_requested  # Intent labelling still uses this at the caller.
     if round_end_frames % 30:
         return set()
-    if rotation_requested and round_end_frames % 60 == 0:
+    if round_end_frames % 60 == 0:
         return {"x"}
-    if rotation_requested and round_end_frames % 60 == 30:
-        return {"z"}
     return {"z"}
 
 
