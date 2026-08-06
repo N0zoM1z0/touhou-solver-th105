@@ -14,14 +14,18 @@ from ..cancel_learning import CancelGraphModel
 from ..defense_learning import DefenseResponseModel
 from ..hazard import HazardEvaluator, HazardProjectile, MovementCandidate
 from ..human_learning import human_demonstration_utility as _human_demonstration_utility
-from ..motion import build_motion_frames, generated_motion_hypotheses
+from ..motion import (
+    build_motion_frames,
+    generated_attack_chord_hypotheses,
+    generated_attack_probe_hypotheses,
+    generated_motion_hypotheses,
+)
 from ..offense_learning import ActionOutcomeModel, combat_context
 from ..offline_artifact import DistilledOutcomePolicy, live_distillation_context
 from ..opponent_model import ActionAssessment, OpponentActionModel
 from ..policy_api import POLICY_API_VERSION, PolicyDecision, PolicyObservation
 from ..projectile_model import ProjectileEnvelopeModel
 from ..reward import RewardConfig, empirical_action_value, reward_for_playstyle
-from ..sakuya_combos import COMBOS, ComboContext, rank_combos
 from ..tactics import ActionCandidate, TacticalContext, rank_actions
 
 
@@ -249,18 +253,6 @@ SKILL_INPUT = {
     "214C": ("214", "c", "setup"),
 }
 
-# Small, bounded neutral probes the agent can evaluate without human corpus.
-# They are deliberately only an approach plus one attack edge: follow-ups are
-# earned later through hit-confirmed combo selection, never blindly committed.
-SELF_PROBE_PATTERNS = {
-    "advance-z": "toward@3,toward+z@2,neutral@4",
-    "advance-az": "toward@3,a+toward+z@2,neutral@4",
-    "advance-ax": "toward@3,a+toward+x@2,neutral@4",
-    "advance-ac": "toward@3,a+toward+c@2,neutral@4",
-    "rising-z": "toward@2,toward+up@2,toward+up+z@2,neutral@4",
-}
-
-
 def _normalize_facing_keys(keys: frozenset[str], facing: int) -> frozenset[str]:
     toward = "right" if facing >= 0 else "left"
     back = "left" if toward == "right" else "right"
@@ -465,6 +457,7 @@ class SakuyaAdaptivePolicy:
         self.last_enemy_action: int | None = None
         self.combo_target_hp: int | None = None
         self.combo_confirm_deadline = 0
+        self.hit_confirm_until = 0
         self.counts: Counter[str] = Counter()
         self.actions: Counter[int] = Counter()
         self.enemy_actions: Counter[int] = Counter()
@@ -554,6 +547,7 @@ class SakuyaAdaptivePolicy:
             "cancel_graph": self.cancel_graph.export_state(),
             "cancel_cooldown": self.cancel_cooldown,
             "motion_probe_cooldown": self.motion_probe_cooldown,
+            "hit_confirm_until": self.hit_confirm_until,
             "coverage_explorer": self.coverage_explorer.export_state(),
         }
 
@@ -578,6 +572,7 @@ class SakuyaAdaptivePolicy:
         self.cancel_graph.import_state(state.get("cancel_graph", {}))
         self.cancel_cooldown = int(state.get("cancel_cooldown", 0))
         self.motion_probe_cooldown = int(state.get("motion_probe_cooldown", 0))
+        self.hit_confirm_until = int(state.get("hit_confirm_until", 0))
         self.coverage_explorer.import_state(state.get("coverage_explorer", {}))
         # A hot-reload state is newer than the encounter-start disk prior.
         # Prevent the first decide() of the new generation from overwriting it.
@@ -719,69 +714,6 @@ class SakuyaAdaptivePolicy:
         self.evade_behavior_probability = self._decision_probability
         return self.evade_queue.popleft()
 
-    def _start_combo(
-        self,
-        observation: PolicyObservation,
-        toward: str,
-        *,
-        punish: bool,
-    ) -> tuple[set[str], str] | None:
-        me, enemy = observation.state.p1, observation.state.p2
-        combo_context = ComboContext(
-            distance=abs(enemy.x - me.x),
-            enemy_x=enemy.x,
-            enemy_y=enemy.y,
-            spirit=int(getattr(me, "spirit", 1000)),
-            punish=punish,
-        )
-        outcome_context = combat_context(
-            distance=combo_context.distance,
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase=self.last_assessment.phase,
-        )
-        adjustments = {
-            candidate.name: self.offense_outcomes.adjustment(
-                candidate.name,
-                outcome_context,
-                explore=punish,
-                reward_config=self.reward_config,
-            )
-            for candidate in COMBOS
-        }
-        viable = rank_combos(
-            combo_context,
-            learned_adjustments=adjustments,
-        )
-        if not viable:
-            return None
-        prefix = "punish" if punish else "combo"
-        by_action = {f"{prefix}:{combo.name}": combo for _score, combo in viable}
-        chosen_action = self._choose_legal_action(
-            observation,
-            prefix,
-            {f"{prefix}:{combo.name}": score for score, combo in viable},
-        )
-        combo = by_action[chosen_action]
-        self.queue.extend(combo.builder(toward))
-        self.queue_intent = chosen_action
-        self.queue_legal_actions = self._decision_legal_actions or (chosen_action,)
-        self.queue_behavior_probability = self._decision_probability
-        self.offense_outcomes.begin(
-            combo.name,
-            outcome_context,
-            frame=observation.frame,
-            commitment=len(self.queue) + 18,
-            enemy_hp=enemy.hp,
-            me_hp=me.hp,
-            spirit=int(getattr(me, "spirit", 1000)),
-        )
-        self.combo_target_hp = enemy.hp
-        self.combo_confirm_deadline = observation.frame + 18
-        self.attack_cooldown = self._attack_cooldown(75)
-        self.counts[f"{prefix}_attempts:{combo.name}"] += 1
-        return self.queue.popleft(), f"{prefix}:{combo.name}"
-
     def _start_human_demonstration(
         self,
         observation: PolicyObservation,
@@ -909,25 +841,27 @@ class SakuyaAdaptivePolicy:
         }
         return self.queue.popleft(), f"human-punish:{signature}"
 
-    def _start_human_probe(
+    def _start_attack_probe(
         self,
         observation: PolicyObservation,
         toward: str,
+        *,
+        phase: str = "neutral",
     ) -> tuple[set[str], str] | None:
-        """Try one learned advancing attack, never a full neutral-state chain."""
+        """Try one corpus or grammar attack edge, never an encoded route."""
         me, enemy = observation.state.p1, observation.state.p2
         context = combat_context(
             distance=abs(enemy.x - me.x),
             enemy_y=enemy.y,
             enemy_x=enemy.x,
-            phase="neutral",
+            phase=phase,
         )
         contexts = self.human_demonstrations.get("contexts", {})
         contexts = contexts if isinstance(contexts, dict) else {}
         candidates = contexts.get(context, ())
         candidates = candidates if isinstance(candidates, list) else ()
         spirit = int(getattr(me, "spirit", 1000))
-        viable: list[tuple[float, str, str, str, int, str, str]] = []
+        viable: dict[str, tuple[float, str, str, str, int, str, str]] = {}
         for candidate in candidates[:8]:
             if not isinstance(candidate, dict):
                 continue
@@ -960,40 +894,45 @@ class SakuyaAdaptivePolicy:
                 context,
                 prior_score=float(candidate.get("score", 0.0)),
             )
-            viable.append(
-                (
-                    score,
-                    signature,
-                    pattern_id,
-                    pattern,
-                    connections,
-                    label,
-                    "human-seed",
-                )
+            intent = f"human-probe:{signature}:{pattern_id}"
+            viable[intent] = (
+                score,
+                signature,
+                pattern_id,
+                pattern,
+                connections,
+                label,
+                "human-seed",
             )
-        for name, pattern in SELF_PROBE_PATTERNS.items():
-            label = f"self-probe:{name}"
+        for name, pattern in generated_attack_probe_hypotheses():
+            label = f"grammar-probe:{name}"
             if _probe_is_empirically_unsafe(self.offense_outcomes, label, context):
                 continue
-            viable.append(
-                (
-                    self._bandit_score(self.offense_outcomes, label, context),
-                    name,
-                    name,
-                    pattern,
-                    0,
-                    label,
-                    "autonomous",
-                )
+            intent = f"grammar-probe:{name}"
+            viable[intent] = (
+                self._bandit_score(self.offense_outcomes, label, context),
+                name,
+                name,
+                pattern,
+                0,
+                label,
+                "grammar",
             )
         if not viable:
             return None
-        score, signature, pattern_id, pattern, connections, label, source = max(viable)
+        selected = self._choose_legal_action(
+            observation,
+            "attack-primitive",
+            {intent: row[0] for intent, row in viable.items()},
+        )
+        score, signature, pattern_id, pattern, connections, label, source = viable[
+            selected
+        ]
         frames = _demonstration_probe_frames(pattern, toward)
         self.queue.extend(frames)
-        self.queue_intent = f"{source}-probe:{signature}"
-        self.queue_legal_actions = (self.queue_intent,)
-        self.queue_behavior_probability = 1.0
+        self.queue_intent = selected
+        self.queue_legal_actions = self._decision_legal_actions or (selected,)
+        self.queue_behavior_probability = self._decision_probability
         self.offense_outcomes.begin(
             label,
             context,
@@ -1007,7 +946,9 @@ class SakuyaAdaptivePolicy:
         self.combo_confirm_deadline = observation.frame + min(16, len(frames) + 4)
         self.attack_cooldown = self._attack_cooldown(90)
         counter_family = (
-            "human_probe_attempts" if source == "human-seed" else "self_probe_attempts"
+            "human_probe_attempts"
+            if source == "human-seed"
+            else "grammar_probe_attempts"
         )
         self.counts[f"{counter_family}:{signature}:{pattern_id}"] += 1
         self.last_human_demonstration = {
@@ -1021,7 +962,7 @@ class SakuyaAdaptivePolicy:
             "probe": True,
             "source": source,
         }
-        return self.queue.popleft(), f"{source}-probe:{signature}"
+        return self.queue.popleft(), selected
 
     def _start_motion_hypothesis(
         self,
@@ -1115,7 +1056,7 @@ class SakuyaAdaptivePolicy:
             phase="reaction",
         )
         spirit = int(getattr(me, "spirit", 1000))
-        viable: list[tuple[float, str, object]] = []
+        viable: dict[str, tuple[float, str, object]] = {}
         for edge_id, edge in candidates[:16]:
             keys = _decode_normalized_chord(edge.chord, toward)
             if keys & {"x", "c"} and spirit < 400:
@@ -1130,18 +1071,22 @@ class SakuyaAdaptivePolicy:
                 context,
                 prior_score=direct_prior,
             )
-            viable.append((score, edge_id, edge))
+            intent = f"learned-cancel:{edge_id}"
+            viable[intent] = (score, edge_id, edge)
         if not viable:
             return None
-        score, edge_id, edge = max(viable, key=lambda item: (item[0], item[1]))
+        selected = self._choose_legal_action(
+            observation,
+            f"learned-cancel:{me.action_id}:{me.action_sequence}:{me.action_pose}",
+            {intent: row[0] for intent, row in viable.items()},
+        )
+        score, edge_id, edge = viable[selected]
         keys = _decode_normalized_chord(edge.chord, toward)
         self.queue.clear()
         self.queue.extend([set(keys)] * 2 + [set()] * 3)
-        self.queue_intent = (
-            f"learned-cancel:{edge.target_action}:{edge.target_sequence}"
-        )
-        self.queue_legal_actions = (self.queue_intent,)
-        self.queue_behavior_probability = 1.0
+        self.queue_intent = selected
+        self.queue_legal_actions = self._decision_legal_actions or (selected,)
+        self.queue_behavior_probability = self._decision_probability
         label = f"cancel:{edge_id}"
         self.offense_outcomes.begin(
             label,
@@ -1159,8 +1104,93 @@ class SakuyaAdaptivePolicy:
         self.counts[f"learned_cancel_score_bucket:{int(score // 100)}"] += 1
         return (
             self.queue.popleft(),
-            f"learned-cancel:{edge.target_action}:{edge.target_sequence}",
+            selected,
         )
+
+    def _start_cancel_hypothesis(
+        self,
+        observation: PolicyObservation,
+        toward: str,
+    ) -> tuple[set[str], str] | None:
+        """Explore a generic follow-up; native transitions validate the edge."""
+        me, enemy = observation.state.p1, observation.state.p2
+        context = combat_context(
+            distance=abs(enemy.x - me.x),
+            enemy_y=enemy.y,
+            enemy_x=enemy.x,
+            phase=self.last_assessment.phase,
+        )
+        source = (
+            f"0x{me.vtable:08X}:{me.action_id}:{me.action_sequence}:"
+            f"{me.action_pose}"
+        )
+        spirit = int(getattr(me, "spirit", 1000))
+        hypotheses: dict[str, list[set[str]]] = {}
+        for label, chord in generated_attack_chord_hypotheses():
+            if chord & {"x", "c"} and spirit < 400:
+                continue
+            hypotheses[f"chord:{label}"] = [
+                _decode_normalized_chord("+".join(sorted(chord)), toward)
+            ] * 2 + [set()] * 3
+        for label, motion, button in generated_motion_hypotheses():
+            if button in {"x", "c"} and spirit < 400:
+                continue
+            hypotheses[f"motion:{label}"] = build_motion_frames(
+                motion,
+                button,
+                toward,
+                direction_frames=1,
+                button_frames=2,
+                recovery_frames=3,
+            )
+
+        def outcome_label(hypothesis: str) -> str:
+            return f"cancel-hypothesis:{source}:{hypothesis}"
+
+        scores = {
+            f"cancel-discovery:{hypothesis}": self._bandit_score(
+                self.offense_outcomes,
+                outcome_label(hypothesis),
+                context,
+            )
+            for hypothesis in hypotheses
+            if not _probe_is_empirically_unsafe(
+                self.offense_outcomes,
+                outcome_label(hypothesis),
+                context,
+            )
+        }
+        if not scores:
+            return None
+        selected = self._choose_legal_action(
+            observation,
+            f"cancel-discovery:{source}",
+            scores,
+        )
+        hypothesis = selected.split("cancel-discovery:", 1)[1]
+        frames = hypotheses[hypothesis]
+        self.queue.clear()
+        self.queue.extend(frames)
+        self.queue_intent = selected
+        self.queue_legal_actions = self._decision_legal_actions or (selected,)
+        self.queue_behavior_probability = self._decision_probability
+        self.offense_outcomes.begin(
+            outcome_label(hypothesis),
+            context,
+            frame=observation.frame,
+            commitment=len(frames) + 12,
+            enemy_hp=enemy.hp,
+            me_hp=me.hp,
+            spirit=spirit,
+            me_x=me.x,
+            me_action_id=me.action_id,
+            projectile_count=len(tuple(getattr(observation, "own_projectiles", ()))),
+        )
+        self.combo_target_hp = enemy.hp
+        self.combo_confirm_deadline = observation.frame + min(14, len(frames) + 5)
+        self.cancel_cooldown = 18
+        self.counts[f"cancel_hypothesis_attempts:{source}:{hypothesis}"] += 1
+        return self.queue.popleft(), selected
 
     def _safe_to_commit_skill(
         self,
@@ -1345,6 +1375,8 @@ class SakuyaAdaptivePolicy:
             self.evade_queue.clear()
             self.defense_responses.discard_episode()
             self.guard_chain_until = 0
+            self.combo_confirm_deadline = 0
+            self.hit_confirm_until = 0
             self.enemy_attack_geometry.reset_episode()
             self.cancel_graph.reset_episode()
             self.counts["round_model_resets"] += 1
@@ -1433,6 +1465,7 @@ class SakuyaAdaptivePolicy:
             self.last_enemy_action = enemy.action_id
         if self.last_enemy_hp is not None and enemy.hp < self.last_enemy_hp:
             self.counts["hit_confirms"] += 1
+            self.hit_confirm_until = observation.frame + 18
         self.last_enemy_hp = enemy.hp
 
         hurt_envelope = boxes_world_envelope(
@@ -1813,14 +1846,25 @@ class SakuyaAdaptivePolicy:
                     self.pending_skill_label = None
 
         learned_cancel = None
-        if (
+        cancel_hypothesis = None
+        chain_window = (
             confirmed_punish
+            or observation.frame <= self.hit_confirm_until
+            or self.combo_confirm_deadline > 0
+        )
+        if (
+            chain_window
             and 300 <= me.action_id < 600
             and not any(self.queue)
             and self.cancel_cooldown == 0
             and not hazards
+            and not enemy_attacking
         ):
             learned_cancel = self._start_learned_cancel(observation, toward)
+            if learned_cancel is None:
+                cancel_hypothesis = self._start_cancel_hypothesis(
+                    observation, toward
+                )
 
         if me_in_hit_reaction:
             self.queue.clear()
@@ -1830,6 +1874,8 @@ class SakuyaAdaptivePolicy:
             intent = "recover-guard"
         elif learned_cancel is not None:
             keys, intent = learned_cancel
+        elif cancel_hypothesis is not None:
+            keys, intent = cancel_hypothesis
         elif 500 <= me.action_id < 600:
             # A special has already committed.  Do not enqueue imaginary
             # dodges during its startup/recovery; buffer guard only when a
@@ -2064,7 +2110,9 @@ class SakuyaAdaptivePolicy:
         elif confirmed_punish and distance < 260 and me.action_id < 50:
             selected = self._start_human_demonstration(observation, toward)
             if selected is None and distance < 150:
-                selected = self._start_combo(observation, toward, punish=True)
+                selected = self._start_attack_probe(
+                    observation, toward, phase="reaction"
+                )
             if selected is None:
                 keys, intent = (
                     ({toward}, "close-for-punish")
@@ -2097,7 +2145,7 @@ class SakuyaAdaptivePolicy:
             and self.last_assessment.phase == "neutral"
             and not hazards
         ):
-            selected = self._start_human_probe(observation, toward)
+            selected = self._start_attack_probe(observation, toward)
             if selected is None:
                 keys = {toward} if distance >= 150.0 else {back}
                 intent = "human-probe-unavailable"
@@ -2333,9 +2381,11 @@ class SakuyaAdaptivePolicy:
             and me.action_id < 50
             and self.last_assessment.phase in {"reaction", "recovery"}
         ):
-            selected = self._start_combo(observation, toward, punish=False)
+            selected = self._start_attack_probe(
+                observation, toward, phase=self.last_assessment.phase
+            )
             if selected is None:
-                keys, intent = {toward}, "close-for-combo"
+                keys, intent = {toward}, "close-for-learned-pressure"
             else:
                 keys, intent = selected
         else:
@@ -2444,7 +2494,7 @@ class SakuyaAdaptivePolicy:
                 "autonomous_probes": sum(
                     count
                     for name, count in self.counts.items()
-                    if name.startswith("self_probe_attempts:")
+                    if name.startswith("grammar_probe_attempts:")
                 ),
                 "last_selected": self.last_human_demonstration or None,
             },

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from th105.policies.adaptive import (
-    SELF_PROBE_PATTERNS,
     SakuyaAdaptivePolicy,
     _bounded_bandit_score,
     _demonstration_frames,
@@ -18,6 +18,7 @@ from th105.policies.adaptive import (
     _pattern_has_advancing_attack,
     _native_guard_response,
 )
+from th105.motion import generated_attack_probe_hypotheses
 from th105.offense_learning import ActionOutcomeModel
 from th105.battle import BattleState, FighterState
 from th105.policy_api import PolicyObservation
@@ -142,11 +143,45 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertIn({"a", "right", "x"}, frames)
 
     def test_autonomous_probes_are_short_bounded_attacks(self) -> None:
-        for pattern in SELF_PROBE_PATTERNS.values():
+        for _label, pattern in generated_attack_probe_hypotheses():
             frames = _demonstration_probe_frames(pattern, "right")
             self.assertTrue(frames)
             self.assertLessEqual(len(frames), 12)
             self.assertTrue(any(keys & {"z", "x", "c"} for keys in frames))
+
+    def test_cancel_discovery_exposes_complete_generic_followup_set(self) -> None:
+        policy = SakuyaAdaptivePolicy()
+        me = replace(
+            _fighter(x=200.0, vtable=0x006B0924, facing=1),
+            action_id=300,
+            action_sequence=0,
+            action_pose=2,
+            action_frame=8,
+        )
+        state = BattleState(
+            manager=1,
+            p1=me,
+            p2=_fighter(x=260.0, vtable=0x006B18DC, facing=-1),
+        )
+        selected = policy._start_cancel_hypothesis(
+            PolicyObservation(
+                frame=10,
+                state=state,
+                previous_state=None,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            ),
+            "right",
+        )
+        self.assertIsNotNone(selected)
+        legal = policy.queue_legal_actions or ()
+        self.assertEqual(len(legal), 69)
+        self.assertTrue(
+            any(name.endswith("chord:down+toward+x") for name in legal)
+        )
+        self.assertTrue(any(name.endswith("motion:236B") for name in legal))
 
     def test_bandit_samples_untried_probe_before_known_probe(self) -> None:
         model = ActionOutcomeModel()

@@ -28,6 +28,33 @@ def generated_motion_hypotheses() -> tuple[tuple[str, str, str], ...]:
     )
 
 
+def generated_attack_chord_hypotheses() -> tuple[tuple[str, frozenset[str]], ...]:
+    """Generate every bounded facing-relative attack chord."""
+    hypotheses: list[tuple[str, frozenset[str]]] = []
+    for vertical in (None, "up", "down"):
+        for horizontal in (None, "toward", "back"):
+            direction = tuple(value for value in (vertical, horizontal) if value)
+            for modifier in (False, True):
+                for button in BUTTON_NOTATION:
+                    chord = (*(("a",) if modifier else ()), *direction, button)
+                    hypotheses.append(("+".join(chord), frozenset(chord)))
+    return tuple(hypotheses)
+
+
+def generated_attack_probe_hypotheses() -> tuple[tuple[str, str], ...]:
+    """Generate single-edge neutral probes from the generic chord grammar.
+
+    The Cartesian grammar covers every facing-relative directional chord,
+    each physical attack button, and the optional movement/dash modifier.
+    These are hypotheses only: native action transitions and measured outcomes
+    decide whether an input exists and whether it is useful.
+    """
+    return tuple(
+        (label, f"toward@3,{label}@2,neutral@4")
+        for label, _chord in generated_attack_chord_hypotheses()
+    )
+
+
 def _digit_chord(digit: str, toward: str) -> set[str]:
     if toward not in {"left", "right"}:
         raise ValueError(f"invalid toward direction {toward!r}")
@@ -66,32 +93,6 @@ def build_motion_frames(
     frames.extend([final] * button_frames)
     frames.extend([set()] * recovery_frames)
     return [set(chord) for chord in frames]
-
-
-def build_close_normal_chain(toward: str) -> list[set[str]]:
-    """A -> 3A-style bootstrap chain, later gated by cancel metadata."""
-    return [{"z"}] * 3 + [set()] * 3 + [{"down", toward, "z"}] * 3 + [set()] * 6
-
-
-def _pulse(chord: set[str], pressed: int, released: int) -> list[set[str]]:
-    return [set(chord) for _ in range(pressed)] + [set() for _ in range(released)]
-
-
-def build_beginner_ground_combo(toward: str) -> list[set[str]]:
-    """Guide-derived AAA > 2B > C > 236B bootstrap timing.
-
-    These conservative spacings are intentionally centralized so live action
-    telemetry can tune them without changing the policy/bridge interface.
-    """
-    if toward not in {"left", "right"}:
-        raise ValueError(f"invalid toward direction {toward!r}")
-    frames: list[set[str]] = []
-    for release_frames in (6, 6, 8):
-        frames.extend(_pulse({"z"}, 2, release_frames))
-    frames.extend(_pulse({"down", "x"}, 3, 9))
-    frames.extend(_pulse({"c"}, 3, 9))
-    frames.extend(build_motion_frames("236", "x", toward, recovery_frames=8))
-    return frames
 
 
 def build_dash_frames(direction: str, *, hold_frames: int = 10) -> list[set[str]]:

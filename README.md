@@ -55,8 +55,16 @@ does not get averaged into Easy timing statistics.
 The framework supplies legal inputs and safety constraints, but it does not
 encode matchup tactics. Native geometry removes physically impossible movement
 responses; a contextual outcome learner decides which remaining defense,
-attack, and counter works for each opponent and state. Human demonstrations and
-guide-derived routes are removable cold-start priors, not immutable decisions.
+attack, and counter works for each opponent and state. Human demonstrations are
+optional cold-start observations; no character-specific combo route is encoded
+in the policy.
+Neutral exploration is generated from all 54 facing-relative direction/chord
+combinations (`9 directions x A modifier x Z/X/C`) plus 15 common motion
+hypotheses (`22/236/214/623/421 x Z/X/C`). During an observed advantage window,
+the same grammar is tested as a follow-up for the current native
+`action/sequence/pose`; only transitions accepted by the game become replayable
+cancel edges. Failed or losing hypotheses remain compact outcome counts and are
+automatically down-ranked.
 Accepted offensive transitions are also learned directly from play: an attack
 button rising edge is retained for at most six frames, then bound to the native
 `action/sequence/pose/frame -> action/sequence` transition it actually caused.
