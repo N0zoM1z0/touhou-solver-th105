@@ -148,9 +148,12 @@ after N native terminal rounds; the reported actual count can exceed N by at
 most the remainder of the current match.
 Learned observations are stored under separate opponent-and-difficulty keys. The injected
 bridge drives TH105's private DirectInput buffer, so autoplay continues in the
-background while another window has focus. Background mode is strict from
-process creation onward: `auto-arcade --launch` creates the exact verified
-executable suspended and process-locally replaces `WS_EX_APPWINDOW` with
+background while another window has focus. By default, `auto-arcade --launch`
+starts an ordinary visible `APPWINDOW`, waits for its native HWND, restores the
+previous foreground window, and then operates TH105 through its process-local
+input bridge. The game remains discoverable in the taskbar and is never made
+topmost. Pass `--strict-background-launch` to instead create the exact verified
+executable suspended and process-locally replace `WS_EX_APPWINDOW` with
 `WS_EX_NOACTIVATE` in its WinMain window style before resuming it. Removing the
 forced app-window eligibility keeps TH105 out of foreground fallback selection
 when another game recreates its window, while avoiding `WS_EX_TOOLWINDOW`
@@ -158,9 +161,11 @@ keeps the visible top-level game window discoverable. The four-byte
 launch patch is guarded by the
 supported SHA-256 and original-byte preimage; it never changes the executable
 on disk, and any failure terminates only the exact newly created PID. Windows
-is also asked to show TH105 without activation, the controller never calls
-`SetForegroundWindow`, and it fails closed before publishing input if TH105
-unexpectedly becomes foreground. This permits a
+is also asked to show TH105 without activation. In strict mode the controller
+fails closed before publishing input if TH105 unexpectedly becomes foreground.
+Normal-window mode permits TH105 to be either foreground or background because
+input is still published only to its private bridge; it never reacquires focus.
+This permits a
 separate process-local TH06 cave/controller to keep running without shared
 keyboard events or focus theft. Pass `--foreground-only` only when explicit
 TH105 focus/reacquisition is desired. Round-end and Arcade dialogue screens

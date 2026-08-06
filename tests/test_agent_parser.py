@@ -12,9 +12,10 @@ from th105.agent import build_parser
 
 
 class AgentParserTests(unittest.TestCase):
-    def test_auto_arcade_is_strict_background_by_default(self) -> None:
+    def test_auto_arcade_uses_normal_window_then_background_by_default(self) -> None:
         args = build_parser().parse_args(["auto-arcade"])
         self.assertFalse(args.foreground_only)
+        self.assertFalse(args.strict_background_launch)
 
     def test_cycle_uses_weighted_default_quotas(self) -> None:
         args = build_parser().parse_args(

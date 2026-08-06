@@ -236,6 +236,8 @@ class Win32:
         u.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
         u.SendInput.restype = wintypes.UINT
         u.GetForegroundWindow.restype = wintypes.HWND
+        u.IsWindow.argtypes = [wintypes.HWND]
+        u.IsWindow.restype = wintypes.BOOL
         u.GetAsyncKeyState.argtypes = [ctypes.c_int]
         u.GetAsyncKeyState.restype = ctypes.c_short
         u.GetWindowThreadProcessId.argtypes = [
@@ -289,6 +291,22 @@ class Win32:
             self.user32.GetForegroundWindow(), ctypes.byref(owner)
         )
         return int(owner.value)
+
+    def foreground_window(self) -> int:
+        return int(self.user32.GetForegroundWindow())
+
+    def restore_foreground(self, window: int, timeout: float = 3.0) -> None:
+        if not window or not self.user32.IsWindow(window):
+            raise RuntimeError(f"prior foreground window is no longer valid: {window}")
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            self.user32.ShowWindow(window, SW_RESTORE)
+            self.user32.BringWindowToTop(window)
+            self.user32.SetForegroundWindow(window)
+            if self.foreground_window() == window:
+                return
+            time.sleep(0.05)
+        raise RuntimeError(f"could not restore foreground window {window}")
 
     def windows_for_pid(self, pid: int) -> tuple[int, ...]:
         found: list[tuple[int, int, int, int]] = []

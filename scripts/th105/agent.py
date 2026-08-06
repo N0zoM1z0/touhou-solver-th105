@@ -107,6 +107,7 @@ def launch_target(
     timeout: float,
     *,
     activate: bool = True,
+    prevent_activation: bool = False,
 ) -> tuple[int, dict[str, object]]:
     exe = target_path(game_dir)
     if api.find_pids(TARGET_EXE):
@@ -115,7 +116,7 @@ def launch_target(
     pid = api.launch(
         exe,
         activate=activate,
-        prevent_activation=not activate,
+        prevent_activation=prevent_activation,
     )
     return pid, wait_exact_target(api, exe, pid, timeout)
 
@@ -467,17 +468,34 @@ def fight(args: argparse.Namespace) -> int:
 def auto_arcade(args: argparse.Namespace) -> int:
     if not 0.0 <= args.exploration_rate <= 1.0:
         raise ValueError("exploration rate must be between zero and one")
+    if args.foreground_only and args.strict_background_launch:
+        raise ValueError(
+            "--foreground-only and --strict-background-launch are mutually exclusive"
+        )
     api = Win32()
     controller_session_id = uuid.uuid4().hex
+    normal_background_launch = (
+        args.launch and not args.foreground_only and not args.strict_background_launch
+    )
+    prior_foreground = api.foreground_window() if normal_background_launch else 0
+    target_existed = bool(api.find_pids(TARGET_EXE)) if args.launch else True
     if args.launch:
         pid, identity = launch_target(
             api,
             args.game_dir,
             args.timeout,
-            activate=args.foreground_only,
+            activate=not args.strict_background_launch,
+            prevent_activation=args.strict_background_launch,
         )
     else:
         pid, identity = find_exact_target(api, target_path(args.game_dir))
+    if normal_background_launch and not target_existed:
+        deadline = time.perf_counter() + args.timeout
+        while time.perf_counter() < deadline and not api.windows_for_pid(pid):
+            time.sleep(0.05)
+        if not api.windows_for_pid(pid):
+            raise RuntimeError(f"TH105 PID {pid} did not create a visible window")
+        api.restore_foreground(prior_foreground, args.timeout)
     reader = ProcessReader(api, pid)
     bridge = InjectedInputBridge(api, reader)
     fight_result: dict[str, object] | None = None
@@ -488,7 +506,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
             pid,
             bridge,
             foreground_required=args.foreground_only,
-            foreground_forbidden=not args.foreground_only,
+            foreground_forbidden=args.strict_background_launch,
         )
         verify_reader(reader, target_path(args.game_dir))
         if args.foreground_only:
@@ -562,7 +580,7 @@ def auto_arcade(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
-                if not args.foreground_only and api.foreground_pid() == pid:
+                if args.strict_background_launch and api.foreground_pid() == pid:
                     keyboard.release_all()
                     raise RuntimeError("TH105 background-only foreground violation")
                 current = scene_id(reader)
@@ -937,8 +955,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--foreground-only",
         action="store_true",
         help=(
-            "explicitly focus/reacquire TH105; by default launch without "
-            "activation and fail closed if TH105 ever takes foreground"
+            "explicitly focus/reacquire TH105 throughout autoplay; by default "
+            "launch a normal window, restore the prior foreground, then run "
+            "through the background input bridge"
+        ),
+    )
+    p.add_argument(
+        "--strict-background-launch",
+        action="store_true",
+        help=(
+            "opt into the exact-build no-activate launch patch instead of a "
+            "normal visible APPWINDOW launch"
         ),
     )
     p.add_argument(
