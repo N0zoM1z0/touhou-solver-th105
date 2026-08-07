@@ -142,6 +142,14 @@ APIs directly. From a Windows prompt:
 run_th105_auto_arcade.bat
 ```
 
+For an unattended fixed-Lunatic run with no controller console window, launch
+`run_th105_background.vbs` instead. It starts the controller through
+`pythonw.exe` with hidden window style; TH105 itself remains an ordinary
+visible, non-topmost taskbar window that can stay minimized or behind other
+applications. Closing an unrelated CMD or PowerShell window therefore does not
+terminate the learner. The same exact-target identity checks, controller lock,
+bridge cleanup, telemetry, and model checkpoint paths still apply.
+
 The launcher is equivalent to
 `auto-arcade --launch --p1-character patchouli --battle-seconds 300`. The default
 `--difficulty curriculum` promotes one level after sustained wins and demotes
