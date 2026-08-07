@@ -127,6 +127,7 @@ class SessionExportTests(unittest.TestCase):
             )
             self.assertEqual(manifest["statistics"]["transitions"], 2)
             self.assertEqual(manifest["statistics"]["terminal_rounds"], 1)
+            self.assertEqual(manifest["statistics"]["retained_terminal_events"], 1)
             self.assertEqual(manifest["statistics"]["learning_curve_points"], 1)
             self.assertEqual(manifest["offline_policy_sha256"], ["d" * 64])
             self.assertEqual(manifest["experiment"]["p1_character"], "patchouli")
@@ -147,6 +148,42 @@ class SessionExportTests(unittest.TestCase):
             ).read()
             self.assertNotIn("private", terminal_text)
             self.assertTrue((output / "README.md").is_file())
+
+    def test_uses_durable_curve_when_terminal_events_have_rotated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "runtime"
+            runtime.mkdir()
+            session = "session-a"
+            (runtime / "th105_transitions.jsonl").write_text(
+                json.dumps(_transition(session, "episode-a:0", 0)) + "\n",
+                encoding="utf-8",
+            )
+            (runtime / "th105_live.jsonl").write_text("", encoding="utf-8")
+            curve = [
+                {
+                    "time": 10.0 + index,
+                    "session_id": session,
+                    "outcome": {"won": won},
+                }
+                for index, won in enumerate((True, False, None))
+            ]
+            (runtime / "th105_learning_curve.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in curve),
+                encoding="utf-8",
+            )
+            manifest = export_session(
+                runtime_dir=runtime,
+                output_dir=Path(temporary) / "export",
+                session_id=session,
+                started_at=10.0,
+                ended_at=12.0,
+                experiment_name="rotated-live",
+                target_rounds=3,
+            )
+            stats = manifest["statistics"]
+            self.assertEqual(stats["terminal_rounds"], 3)
+            self.assertEqual(stats["retained_terminal_events"], 0)
+            self.assertEqual((stats["wins"], stats["losses"], stats["draws"]), (1, 1, 1))
 
     def test_rejects_sensitive_transition_values(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

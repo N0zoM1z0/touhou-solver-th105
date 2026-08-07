@@ -213,7 +213,8 @@ from different playable characters cannot share a checkpoint namespace.
 
 - `data/transitions.jsonl.gz`: schema-versioned state/action/outcome/next-state
   records at policy-option boundaries.
-- `data/terminals.jsonl.gz`: sanitized encounter and terminal summaries.
+- `data/terminals.jsonl.gz`: retained sanitized encounter/terminal summaries;
+  this bounded stream may cover fewer rounds than the durable learning curve.
 - `data/learning_curve.jsonl.gz`: one compact physical checkpoint per round.
 - `models/baseline/`: online learner state before collection.
 - `models/final/`: online learner state after collection.
@@ -346,9 +347,23 @@ def export_session(
     punished = sum(
         bool(record.get("outcome", {}).get("punished")) for record in transitions
     )
-    wins = sum(event.get("won") is True for event in terminals)
-    losses = sum(event.get("won") is False for event in terminals)
-    draws = len(terminals) - wins - losses
+    # Live telemetry is intentionally bounded and older rotations may no
+    # longer be present in a long-running session.  The compact learning curve
+    # is durable and has exactly one outcome checkpoint per native terminal
+    # round, so it is the authority for physical round statistics.
+    curve_outcomes = [
+        record.get("outcome", {}).get("won")
+        for record in curve_points
+        if isinstance(record.get("outcome"), dict)
+    ]
+    terminal_outcomes = (
+        curve_outcomes
+        if curve_outcomes
+        else [event.get("won") for event in terminals]
+    )
+    wins = sum(won is True for won in terminal_outcomes)
+    losses = sum(won is False for won in terminal_outcomes)
+    draws = len(terminal_outcomes) - wins - losses
 
     artifacts: dict[str, dict[str, object]] = {}
     for path in sorted(output_dir.rglob("*")):
@@ -409,7 +424,8 @@ def export_session(
         "statistics": {
             "transitions": len(transitions),
             "episodes": len(episodes),
-            "terminal_rounds": len(terminals),
+            "terminal_rounds": len(terminal_outcomes),
+            "retained_terminal_events": len(terminals),
             "learning_curve_points": len(curve_points),
             "wins": wins,
             "losses": losses,
