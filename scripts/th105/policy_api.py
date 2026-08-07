@@ -51,6 +51,10 @@ class PolicyDecision:
     combat_option: str | None = None
     legal_combat_options: tuple[str, ...] | None = None
     combat_option_probability: float = 1.0
+    # Optional, algorithm-neutral attribution metadata.  It is persisted in
+    # new corpus rows so offline replay can rebuild a later online hierarchy;
+    # old policies/corpora remain valid when it is absent.
+    learning_context: str | None = None
 
 
 class CombatPolicy(Protocol):

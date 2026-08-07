@@ -6,15 +6,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.offense_learning import ActionOutcomeModel, OptionOutcomeModel, combat_context
+from th105.offense_learning import (
+    ActionOutcomeModel,
+    OptionOutcomeModel,
+    combat_context,
+    context_hierarchy,
+)
 
 
 class ActionOutcomeTests(unittest.TestCase):
     def test_records_hit_startup_damage_and_punish(self) -> None:
         model = ActionOutcomeModel()
         model.begin(
-            "236B", "far:ground:field:recovery", frame=10, commitment=20,
-            enemy_hp=10000, me_hp=10000, spirit=1000,
+            "236B",
+            "far:ground:field:recovery",
+            frame=10,
+            commitment=20,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
         )
         model.observe(frame=16, enemy_hp=9700, me_hp=10000, spirit=800)
         model.observe(frame=30, enemy_hp=9100, me_hp=9800, spirit=800)
@@ -59,8 +69,13 @@ class ActionOutcomeTests(unittest.TestCase):
         model = ActionOutcomeModel()
         for index in range(6):
             model.begin(
-                "slow", "ctx", frame=index * 20, commitment=10,
-                enemy_hp=10000, me_hp=10000, spirit=1000,
+                "slow",
+                "ctx",
+                frame=index * 20,
+                commitment=10,
+                enemy_hp=10000,
+                me_hp=10000,
+                spirit=1000,
             )
             model.observe(
                 frame=index * 20 + 10,
@@ -76,11 +91,89 @@ class ActionOutcomeTests(unittest.TestCase):
             "close:ground:corner:recovery",
         )
 
+    def test_enemy_action_context_has_bounded_legacy_backoff(self) -> None:
+        context = combat_context(
+            distance=70,
+            enemy_y=100,
+            enemy_x=400,
+            player_y=0,
+            phase="active",
+            enemy_action=410,
+            enemy_action_family="projectile",
+        )
+        self.assertEqual(
+            context,
+            "close:air:field:danger|rh=above|ef=projectile|ea=410",
+        )
+        levels = context_hierarchy(context)
+        self.assertEqual(levels[0], context)
+        self.assertIn("close:air:field:danger", levels)
+        self.assertIn("@phase:danger|ef=projectile", levels)
+        self.assertEqual(levels[-1], "*")
+        self.assertLessEqual(len(levels), 6)
+
+    def test_legacy_context_evidence_backs_off_for_unseen_enemy_action(self) -> None:
+        model = ActionOutcomeModel()
+        model.record_sample(
+            "option:attack",
+            "close:ground:field:recovery",
+            damage=500,
+            self_damage=0,
+            spirit_cost=0,
+            commitment=20,
+            damage_bp=500,
+            self_damage_bp=0,
+            spirit_cost_bp=0,
+        )
+        estimate = model.estimate(
+            "option:attack",
+            "close:ground:field:recovery|rh=level|ef=strike|ea=310",
+        )
+        self.assertGreater(estimate.effective_trials, 0)
+        self.assertGreater(estimate.utility, 0)
+
+    def test_exact_enemy_actions_can_learn_different_action_values(self) -> None:
+        model = ActionOutcomeModel()
+        positive = "close:ground:field:recovery|rh=level|ef=strike|ea=310"
+        negative = "close:ground:field:recovery|rh=level|ef=strike|ea=320"
+        for _ in range(10):
+            model.record_sample(
+                "option:punish",
+                positive,
+                damage=800,
+                self_damage=0,
+                spirit_cost=0,
+                commitment=20,
+                damage_bp=800,
+                self_damage_bp=0,
+                spirit_cost_bp=0,
+            )
+            model.record_sample(
+                "option:punish",
+                negative,
+                damage=0,
+                self_damage=800,
+                spirit_cost=0,
+                commitment=20,
+                damage_bp=0,
+                self_damage_bp=800,
+                spirit_cost_bp=0,
+            )
+        self.assertGreater(
+            model.estimate("option:punish", positive).utility,
+            model.estimate("option:punish", negative).utility,
+        )
+
     def test_round_trip(self) -> None:
         first = ActionOutcomeModel()
         first.begin(
-            "AAAA", "ctx", frame=0, commitment=5,
-            enemy_hp=1000, me_hp=1000, spirit=1000,
+            "AAAA",
+            "ctx",
+            frame=0,
+            commitment=5,
+            enemy_hp=1000,
+            me_hp=1000,
+            spirit=1000,
         )
         first.observe(frame=5, enemy_hp=500, me_hp=1000, spirit=1000)
         second = ActionOutcomeModel()
@@ -92,8 +185,13 @@ class ActionOutcomeTests(unittest.TestCase):
     def test_motion_hierarchy_shares_sparse_evidence(self) -> None:
         model = ActionOutcomeModel()
         model.begin(
-            "motion:character:236B", "ctx", frame=0, commitment=5,
-            enemy_hp=10000, me_hp=10000, spirit=1000,
+            "motion:character:236B",
+            "ctx",
+            frame=0,
+            commitment=5,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
         )
         model.observe(frame=5, enemy_hp=9400, me_hp=10000, spirit=900)
         estimate = model.estimate("motion:other:236B", "ctx")
@@ -103,11 +201,20 @@ class ActionOutcomeTests(unittest.TestCase):
     def test_projectile_receives_delayed_eligibility_credit(self) -> None:
         model = ActionOutcomeModel()
         model.begin(
-            "motion:character:236B", "ctx", frame=0, commitment=5,
-            enemy_hp=10000, me_hp=10000, spirit=1000, projectile_count=0,
+            "motion:character:236B",
+            "ctx",
+            frame=0,
+            commitment=5,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
+            projectile_count=0,
         )
         model.observe(
-            frame=5, enemy_hp=10000, me_hp=10000, spirit=900,
+            frame=5,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=900,
             projectile_count=1,
         )
         model.observe(frame=45, enemy_hp=9500, me_hp=10000, spirit=900)
@@ -118,8 +225,13 @@ class ActionOutcomeTests(unittest.TestCase):
     def test_option_value_does_not_apply_attack_whiff_penalty(self) -> None:
         model = OptionOutcomeModel()
         model.begin(
-            "option:defend", "ctx", frame=0, commitment=30,
-            enemy_hp=10000, me_hp=10000, spirit=1000,
+            "option:defend",
+            "ctx",
+            frame=0,
+            commitment=30,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
         )
         model.observe(frame=30, enemy_hp=10000, me_hp=10000, spirit=1000)
         self.assertEqual(model.estimate("option:defend", "ctx").utility, 0.0)
@@ -127,12 +239,21 @@ class ActionOutcomeTests(unittest.TestCase):
     def test_terminal_credit_is_decayed_and_round_summary_is_persisted(self) -> None:
         model = ActionOutcomeModel()
         model.begin(
-            "safe", "ctx", frame=0, commitment=5,
-            enemy_hp=10000, me_hp=10000, spirit=1000,
+            "safe",
+            "ctx",
+            frame=0,
+            commitment=5,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
         )
         model.observe(frame=5, enemy_hp=9700, me_hp=10000, spirit=1000)
         model.observe_terminal(
-            frame=125, won=True, enemy_hp=0, me_hp=4000, spirit=500,
+            frame=125,
+            won=True,
+            enemy_hp=0,
+            me_hp=4000,
+            spirit=500,
         )
         stats = model.table["ctx"]["safe"]
         self.assertGreater(stats.terminal_win_credit, 0.0)
@@ -170,8 +291,13 @@ class ActionOutcomeTests(unittest.TestCase):
         self.assertEqual(stats.total_spirit_cost_bp, 200)
         self.assertEqual(sum(stats.self_damage_histogram), 4)
         model.begin(
-            "legacy", "*", frame=10, commitment=1,
-            enemy_hp=10000, me_hp=10000, spirit=1000,
+            "legacy",
+            "*",
+            frame=10,
+            commitment=1,
+            enemy_hp=10000,
+            me_hp=10000,
+            spirit=1000,
         )
         model.observe(frame=11, enemy_hp=10000, me_hp=10000, spirit=1000)
         self.assertEqual(stats.normalized_samples, 5)

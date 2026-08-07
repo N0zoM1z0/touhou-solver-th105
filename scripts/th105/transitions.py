@@ -15,7 +15,6 @@ from .schema import (
 )
 
 
-
 class TransitionWriter(Protocol):
     def write(self, record: dict[str, object]) -> None: ...
 
@@ -90,8 +89,7 @@ def transition_state(
     relative_x = float(getattr(enemy, "x", 0.0)) - float(getattr(me, "x", 0.0))
     relative_y = float(getattr(enemy, "y", 0.0)) - float(getattr(me, "y", 0.0))
     closing_speed = (
-        float(getattr(enemy, "velocity_x", 0.0))
-        - float(getattr(me, "velocity_x", 0.0))
+        float(getattr(enemy, "velocity_x", 0.0)) - float(getattr(me, "velocity_x", 0.0))
     ) * (1.0 if relative_x >= 0.0 else -1.0)
     return {
         "relative_x_q4": _quantize(relative_x, 4.0),
@@ -105,8 +103,7 @@ def transition_state(
             for projectile in enemy_projectiles[:32]
         ],
         "own_projectiles": [
-            _projectile_features(projectile, me)
-            for projectile in own_projectiles[:32]
+            _projectile_features(projectile, me) for projectile in own_projectiles[:32]
         ],
     }
 
@@ -122,6 +119,7 @@ class _ActiveOption:
     combat_option: str | None
     legal_combat_options: tuple[str, ...] | None
     combat_option_probability: float
+    learning_context: str | None
     start_state: dict[str, object]
     start_enemy_hp: int
     start_me_hp: int
@@ -203,18 +201,16 @@ class OptionTransitionRecorder:
 
     @classmethod
     def _legal_combat_options(cls, decision: Any) -> tuple[str, ...] | None:
-        return cls._canonical_actions(
-            getattr(decision, "legal_combat_options", None)
-        )
+        return cls._canonical_actions(getattr(decision, "legal_combat_options", None))
 
     def _append_keys(self, keys: object) -> None:
         if self.active is None:
             return
         key = self._keys_key(keys)
         if self.active.key_trace_rle and self.active.key_trace_rle[-1]["keys"] == key:
-            self.active.key_trace_rle[-1]["frames"] = int(
-                self.active.key_trace_rle[-1]["frames"]
-            ) + 1
+            self.active.key_trace_rle[-1]["frames"] = (
+                int(self.active.key_trace_rle[-1]["frames"]) + 1
+            )
         else:
             self.active.key_trace_rle.append({"keys": key, "frames": 1})
 
@@ -237,9 +233,7 @@ class OptionTransitionRecorder:
         probability = float(getattr(decision, "behavior_probability", 1.0))
         if not 0.0 < probability <= 1.0:
             probability = 1.0
-        option_probability = float(
-            getattr(decision, "combat_option_probability", 1.0)
-        )
+        option_probability = float(getattr(decision, "combat_option_probability", 1.0))
         if not 0.0 < option_probability <= 1.0:
             option_probability = 1.0
         self.active = _ActiveOption(
@@ -256,6 +250,11 @@ class OptionTransitionRecorder:
             ),
             legal_combat_options=self._legal_combat_options(decision),
             combat_option_probability=option_probability,
+            learning_context=(
+                str(value)
+                if (value := getattr(decision, "learning_context", None)) is not None
+                else None
+            ),
             start_state=transition_state(state, enemy_projectiles, own_projectiles),
             start_enemy_hp=int(enemy.hp),
             start_me_hp=int(me.hp),
@@ -279,17 +278,12 @@ class OptionTransitionRecorder:
         policy_generation: int = 0,
         policy_sha256: str | None = None,
     ) -> None:
-        boundary = (
-            self.active is not None
-            and (
-                self.active.action != str(decision.intent)
-                or self.active.legal_actions != self._legal_actions(decision)
-                or self.active.combat_option
-                != getattr(decision, "combat_option", None)
-                or self.active.legal_combat_options
-                != self._legal_combat_options(decision)
-                or self.active.policy_generation != policy_generation
-            )
+        boundary = self.active is not None and (
+            self.active.action != str(decision.intent)
+            or self.active.legal_actions != self._legal_actions(decision)
+            or self.active.combat_option != getattr(decision, "combat_option", None)
+            or self.active.legal_combat_options != self._legal_combat_options(decision)
+            or self.active.policy_generation != policy_generation
         )
         if boundary:
             self._finish(
@@ -355,7 +349,8 @@ class OptionTransitionRecorder:
                 "state": option.start_state,
                 "legal_actions": (
                     list(option.legal_actions)
-                    if option.legal_actions is not None else None
+                    if option.legal_actions is not None
+                    else None
                 ),
                 "legal_actions_known": option.legal_actions is not None,
                 "action": option.action,
@@ -368,15 +363,14 @@ class OptionTransitionRecorder:
                 ),
                 "combat_options_known": option.legal_combat_options is not None,
                 "combat_option_probability": option.combat_option_probability,
+                "learning_context": option.learning_context,
                 "key_trace_rle": option.key_trace_rle,
                 "duration_frames": max(1, frame - option.start_frame),
                 "outcome": {
                     "damage": damage,
                     "damage_bp": basis_points(damage, option.max_enemy_hp),
                     "self_damage": self_damage,
-                    "self_damage_bp": basis_points(
-                        self_damage, option.max_me_hp
-                    ),
+                    "self_damage_bp": basis_points(self_damage, option.max_me_hp),
                     "spirit_delta": spirit_delta,
                     "spirit_cost_bp": basis_points(
                         max(0, -spirit_delta), option.max_spirit
@@ -387,7 +381,8 @@ class OptionTransitionRecorder:
                 },
                 "next_state": (
                     transition_state(state, enemy_projectiles, own_projectiles)
-                    if state is not None else None
+                    if state is not None
+                    else None
                 ),
             }
         )

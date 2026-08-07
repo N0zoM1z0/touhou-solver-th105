@@ -74,6 +74,14 @@ introducing a dataset-global ID table that is awkward to merge. Every export
 reports raw transition bytes, compressed bytes, and compressed bytes per
 transition in its manifest.
 
+Current writers additionally store an opaque `learning_context` used by the
+small online bandit. It includes relative height plus the learned enemy action
+family and exact native offensive action ID. This field is optional so all
+existing autonomous-grammar-v4 shards remain replayable. Offline replay uses
+the saved context when present and otherwise reconstructs a conservative
+danger/reaction/recovery context from quantized native state and cumulative
+opponent profiles.
+
 Rows should be dictionary encoded into Arrow/Parquet shards with Zstd
 compression. Shards are immutable, checksummed, and listed in a manifest. A
 target size of 32--128 MiB avoids millions of tiny files. Storage stays bounded
@@ -141,6 +149,14 @@ The first baseline is deliberately tabular and CPU-native:
    deployed as uncertainty, not averaged away during evaluation.
 5. Distill the best CPU ensemble into a bounded lookup table or compiled tree
    scorer. A larger training model is not automatically a better runtime model.
+
+There is also a deterministic, low-cost replay baseline before fitted trees:
+`scripts/replay_th105_corpus.py` folds factual transition outcomes into fresh
+v6 `ActionOutcomeModel` and `OptionOutcomeModel` sufficient statistics. It
+deduplicates transition IDs, maps generic motion/cancel intents back to runtime
+labels, groups consecutive micro intents into bounded option segments, and
+emits a separate knowledge artifact for inspection. This is a weight rebuild,
+not corpus mutation and not reward-dependent Q training.
 
 `scripts/train_th105_cpu.py` implements the multi-head boosted-tree baseline and
 distills an algorithm-neutral `distilled_policy.json`. Its categorical action,

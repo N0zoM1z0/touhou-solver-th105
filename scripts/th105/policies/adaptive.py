@@ -418,7 +418,7 @@ def _prune_legacy_coverage_scopes(explorer: CoverageExplorer) -> None:
 
 class AutonomousAdaptivePolicy:
     api_version = POLICY_API_VERSION
-    name = "hierarchical-options-v5"
+    name = "enemy-action-options-v6"
 
     def __init__(self) -> None:
         self.playstyle = "balanced"
@@ -461,6 +461,7 @@ class AutonomousAdaptivePolicy:
         self.combat_option_behavior_probability = 1.0
         self._decision_legal_actions: tuple[str, ...] | None = None
         self._decision_probability = 1.0
+        self._current_combat_context: str | None = None
         self.cancel_cooldown = 0
         self.motion_probe_cooldown = 0
         self.last_assessment = ActionAssessment(0, 0, "neutral", 0.0, 0.0, 0.0, False)
@@ -651,6 +652,46 @@ class AutonomousAdaptivePolicy:
             combat_option=self.active_combat_option,
             legal_combat_options=self.combat_option_legal_actions,
             combat_option_probability=self.combat_option_behavior_probability,
+            learning_context=self._current_combat_context,
+        )
+
+    def _enemy_action_family(self, enemy: object) -> str:
+        """Classify an exact native action from learned physical evidence."""
+        action_id = int(getattr(enemy, "action_id", 0))
+        if 50 <= action_id < 200:
+            return "reaction"
+        if 600 <= action_id < 800:
+            return "spell"
+        if not OpponentActionModel.is_offensive(action_id):
+            return "neutral"
+        profile = self.opponent.profiles.get(action_id)
+        strike = bool(getattr(enemy, "attack_boxes", ())) or bool(
+            profile is not None and profile.active_box_observations > 0
+        )
+        projectile = bool(profile is not None and profile.projectile_samples > 0)
+        if strike and projectile:
+            return "hybrid"
+        if projectile:
+            return "projectile"
+        if strike:
+            return "strike"
+        return "offensive"
+
+    def _combat_outcome_context(
+        self, observation: PolicyObservation, *, phase: str | None = None
+    ) -> str:
+        me, enemy = observation.state.p1, observation.state.p2
+        action_id = int(enemy.action_id)
+        return combat_context(
+            distance=abs(float(enemy.x) - float(me.x)),
+            enemy_y=float(enemy.y),
+            enemy_x=float(enemy.x),
+            player_y=float(me.y),
+            phase=phase or self.last_assessment.phase,
+            enemy_action=(
+                action_id if OpponentActionModel.is_offensive(action_id) else None
+            ),
+            enemy_action_family=self._enemy_action_family(enemy),
         )
 
     def _choose_legal_action(
@@ -679,7 +720,9 @@ class AutonomousAdaptivePolicy:
                     self.counts[f"offline_candidate_miss:{family}"] += 1
         me, enemy = observation.state.p1, observation.state.p2
         distance = abs(float(enemy.x) - float(me.x))
-        distance_bucket = "close" if distance < 100 else "mid" if distance < 280 else "far"
+        distance_bucket = (
+            "close" if distance < 100 else "mid" if distance < 280 else "far"
+        )
         altitude = "air" if float(me.y) >= 8.0 else "ground"
         phase = self.last_assessment.phase
         phase_bucket = (
@@ -692,9 +735,7 @@ class AutonomousAdaptivePolicy:
         # The rich distillation context remains in the raw transition. Online
         # coverage uses a bounded scope so visits survive and actually converge.
         scope_family = family.split(":", 1)[0]
-        coverage_scope = (
-            f"{scope_family}:{distance_bucket}:{altitude}:{phase_bucket}"
-        )
+        coverage_scope = f"{scope_family}:{distance_bucket}:{altitude}:{phase_bucket}"
         coverage_keys: dict[str, str] = {}
         for action in combined:
             if action.startswith("learned-cancel:"):
@@ -704,7 +745,13 @@ class AutonomousAdaptivePolicy:
                 )
             else:
                 coverage_keys[action] = action
-        minimum_rate = 0.005 if scope_family == "defense" else 0.01 if scope_family == "combat-option" else 0.02
+        minimum_rate = (
+            0.005
+            if scope_family == "defense"
+            else 0.01
+            if scope_family == "combat-option"
+            else 0.02
+        )
         selection = self.coverage_explorer.choose(
             coverage_scope,
             combined,
@@ -734,12 +781,7 @@ class AutonomousAdaptivePolicy:
     ) -> str:
         """Learn safe high-level intent; native danger gates run before this."""
         me, enemy = observation.state.p1, observation.state.p2
-        context = combat_context(
-            distance=distance,
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase=self.last_assessment.phase,
-        )
+        context = self._combat_outcome_context(observation)
         legal = ["defend", "reposition"]
         if distance > 72.0:
             legal.append("approach")
@@ -771,10 +813,10 @@ class AutonomousAdaptivePolicy:
             )
             for option in legal
         }
-        selected = self._choose_legal_action(
-            observation, "combat-option", scores
+        selected = self._choose_legal_action(observation, "combat-option", scores)
+        option = (
+            selected.split(":", 1)[-1] if selected.startswith("option:") else selected
         )
-        option = selected.split(":", 1)[-1] if selected.startswith("option:") else selected
         self.active_combat_option = option
         self.combat_option_until = observation.frame + 45
         self.combat_option_legal_actions = self._decision_legal_actions
@@ -817,17 +859,16 @@ class AutonomousAdaptivePolicy:
         toward: str,
     ) -> tuple[set[str], str] | None:
         me, enemy = observation.state.p1, observation.state.p2
-        context = combat_context(
-            distance=abs(enemy.x - me.x),
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase="reaction",
-        )
+        context = self._combat_outcome_context(observation, phase="reaction")
+        lookup_context = context.split("|", 1)[0]
         viable: list[tuple[float, str, str, str, int]] = []
         spirit = int(getattr(me, "spirit", 1000))
         distance = abs(enemy.x - me.x)
-        prefix = context.rsplit(":", 1)[0]
-        context_options = ((context, 0.0), (f"{prefix}:neutral", 100.0))
+        prefix = lookup_context.rsplit(":", 1)[0]
+        context_options = (
+            (lookup_context, 0.0),
+            (f"{prefix}:neutral", 100.0),
+        )
         compiled_contexts = self.human_demonstrations.get("contexts", {})
         if isinstance(compiled_contexts, dict):
             for source_context, context_penalty in context_options:
@@ -947,15 +988,11 @@ class AutonomousAdaptivePolicy:
     ) -> tuple[set[str], str] | None:
         """Try one corpus or grammar attack edge, never an encoded route."""
         me, enemy = observation.state.p1, observation.state.p2
-        context = combat_context(
-            distance=abs(enemy.x - me.x),
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase=phase,
-        )
+        context = self._combat_outcome_context(observation, phase=phase)
+        lookup_context = context.split("|", 1)[0]
         contexts = self.human_demonstrations.get("contexts", {})
         contexts = contexts if isinstance(contexts, dict) else {}
-        candidates = contexts.get(context, ())
+        candidates = contexts.get(lookup_context, ())
         candidates = candidates if isinstance(candidates, list) else ()
         spirit = int(getattr(me, "spirit", 1000))
         viable: dict[str, tuple[float, str, str, str, int, str, str]] = {}
@@ -1068,12 +1105,7 @@ class AutonomousAdaptivePolicy:
     ) -> tuple[set[str], str] | None:
         """Probe one generated command; native outcomes decide whether it exists."""
         me, enemy = observation.state.p1, observation.state.p2
-        context = combat_context(
-            distance=abs(enemy.x - me.x),
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase=self.last_assessment.phase,
-        )
+        context = self._combat_outcome_context(observation)
         hypotheses = {
             label: (motion, button)
             for label, motion, button in generated_motion_hypotheses()
@@ -1145,12 +1177,7 @@ class AutonomousAdaptivePolicy:
         )
         if not candidates:
             return None
-        context = combat_context(
-            distance=abs(enemy.x - me.x),
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase="reaction",
-        )
+        context = self._combat_outcome_context(observation, phase="reaction")
         spirit = int(getattr(me, "spirit", 1000))
         viable: dict[str, tuple[float, str, object]] = {}
         for edge_id, edge in candidates[:16]:
@@ -1210,15 +1237,9 @@ class AutonomousAdaptivePolicy:
     ) -> tuple[set[str], str] | None:
         """Explore a generic follow-up; native transitions validate the edge."""
         me, enemy = observation.state.p1, observation.state.p2
-        context = combat_context(
-            distance=abs(enemy.x - me.x),
-            enemy_y=enemy.y,
-            enemy_x=enemy.x,
-            phase=self.last_assessment.phase,
-        )
+        context = self._combat_outcome_context(observation)
         source = (
-            f"0x{me.vtable:08X}:{me.action_id}:{me.action_sequence}:"
-            f"{me.action_pose}"
+            f"0x{me.vtable:08X}:{me.action_id}:{me.action_sequence}:{me.action_pose}"
         )
         spirit = int(getattr(me, "spirit", 1000))
         hypotheses: dict[str, list[set[str]]] = {}
@@ -1404,6 +1425,7 @@ class AutonomousAdaptivePolicy:
             projectile_count=len(observation.enemy_projectiles),
             active_hitbox=bool(getattr(enemy, "attack_boxes", ())),
         )
+        self._current_combat_context = self._combat_outcome_context(observation)
         self.enemy_attack_geometry.observe(
             observation.frame,
             action_id=enemy.action_id,
@@ -1851,9 +1873,7 @@ class AutonomousAdaptivePolicy:
         ):
             learned_cancel = self._start_learned_cancel(observation, toward)
             if learned_cancel is None:
-                cancel_hypothesis = self._start_cancel_hypothesis(
-                    observation, toward
-                )
+                cancel_hypothesis = self._start_cancel_hypothesis(observation, toward)
 
         if me_in_hit_reaction:
             self.queue.clear()

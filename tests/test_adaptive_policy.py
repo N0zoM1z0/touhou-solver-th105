@@ -62,12 +62,8 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         explorer.scope_decisions["attack:lunatic:opponent:far"] = 3
         explorer.scope_decisions["attack:far:ground:neutral"] = 2
         _prune_legacy_coverage_scopes(explorer)
-        self.assertEqual(
-            explorer.selected, {"attack:far:ground:neutral|x": 2}
-        )
-        self.assertEqual(
-            explorer.scope_decisions, {"attack:far:ground:neutral": 2}
-        )
+        self.assertEqual(explorer.selected, {"attack:far:ground:neutral|x": 2})
+        self.assertEqual(explorer.scope_decisions, {"attack:far:ground:neutral": 2})
 
     def test_neutral_decision_exposes_complete_native_gated_set(self) -> None:
         policy = AutonomousAdaptivePolicy()
@@ -93,6 +89,31 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertIsNotNone(decision.combat_option)
         self.assertIn(decision.combat_option, decision.legal_combat_options or ())
         self.assertGreaterEqual(len(decision.legal_combat_options or ()), 3)
+        self.assertIn("|ef=neutral", decision.learning_context or "")
+
+    def test_offensive_enemy_action_conditions_the_learning_context(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        enemy = replace(
+            _fighter(x=260.0, vtable=0x006B18DC, facing=-1),
+            action_id=310,
+            attack_boxes=((0, 0, 20, 20),),
+        )
+        observation = PolicyObservation(
+            frame=10,
+            state=BattleState(
+                manager=1,
+                p1=_fighter(x=200.0, vtable=0x006B0EBC, facing=1),
+                p2=enemy,
+            ),
+            previous_state=None,
+            enemy_projectiles=(),
+            difficulty="lunatic",
+            opponent_key="0x006B18DC@lunatic",
+            exploration_rate=0.0,
+        )
+        decision = policy.decide(observation)
+        self.assertIn("|ef=strike", decision.learning_context or "")
+        self.assertIn("|ea=310", decision.learning_context or "")
 
     def test_frame_attack_box_replaces_learned_square_extent(self) -> None:
         projectile = SimpleNamespace(
@@ -198,9 +219,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertIsNotNone(selected)
         legal = policy.queue_legal_actions or ()
         self.assertEqual(len(legal), 69)
-        self.assertTrue(
-            any(name.endswith("chord:down+toward+x") for name in legal)
-        )
+        self.assertTrue(any(name.endswith("chord:down+toward+x") for name in legal))
         self.assertTrue(any(name.endswith("motion:236B") for name in legal))
 
     def test_patchouli_uses_the_complete_generic_motion_catalog(self) -> None:
@@ -351,6 +370,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertIsNotNone(utility)
         assert utility is not None
         self.assertGreater(utility, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

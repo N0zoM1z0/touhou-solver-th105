@@ -387,3 +387,14 @@ Additional IDA names/comments: `get_game_config`, `g_game_config`,
   60-second checkpoints contained both coverage and option models, the next
   Arcade opponent loaded without a policy error, and all five high-level
   options appeared in the fresh transition stream.
+- **Implemented (v6, 2026-08-07)** high-level option and concrete-action
+  outcomes are conditioned on the opponent's exact offensive `action_id`,
+  learned strike/projectile/hybrid/spell family, action phase, distance,
+  relative height, and corner state. Sparse observations back off through at
+  most six context levels and the existing action-side hierarchy; native hazard
+  vetoes remain authoritative.
+- **Implemented** reusable autonomous-grammar-v4 transition shards can be
+  replayed into fresh v6 online weights. New rows store the exact runtime
+  `learning_context`; old rows use conservative native-state/profile inference.
+  Replay keeps separate damage, self-damage, spirit, commitment, effect, and
+  terminal components and emits a separate artifact before installation.

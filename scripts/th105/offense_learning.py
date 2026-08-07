@@ -15,13 +15,78 @@ from .reward import (
 
 
 def combat_context(
-    *, distance: float, enemy_y: float, enemy_x: float, phase: str
+    *,
+    distance: float,
+    enemy_y: float,
+    enemy_x: float,
+    phase: str,
+    player_y: float | None = None,
+    enemy_action: int | None = None,
+    enemy_action_family: str | None = None,
 ) -> str:
+    """Build a compact combat context with backward-compatible conditioning.
+
+    The four colon-separated fields are the v5 context and remain a usable
+    backoff row.  Optional v6 fields condition decisions on relative height,
+    the learned enemy action family, and (for offensive actions) the exact
+    native action ID.
+    """
     distance_bucket = "close" if distance < 80 else "mid" if distance < 260 else "far"
     altitude = "ground" if enemy_y < 44 else "air"
     corner = "corner" if enemy_x < 150 or enemy_x > 1130 else "field"
     phase_bucket = phase if phase in {"reaction", "recovery", "neutral"} else "danger"
-    return f"{distance_bucket}:{altitude}:{corner}:{phase_bucket}"
+    context = f"{distance_bucket}:{altitude}:{corner}:{phase_bucket}"
+    if player_y is not None:
+        relative_y = float(enemy_y) - float(player_y)
+        relative_height = (
+            "above" if relative_y > 60.0 else "below" if relative_y < -60.0 else "level"
+        )
+        context += f"|rh={relative_height}"
+    if enemy_action_family is not None:
+        family = (
+            "".join(
+                character
+                for character in str(enemy_action_family).lower()
+                if character.isalnum() or character in {"-", "_"}
+            )
+            or "unknown"
+        )
+        context += f"|ef={family}"
+    if enemy_action is not None:
+        context += f"|ea={int(enemy_action)}"
+    return context
+
+
+def context_hierarchy(context: str) -> tuple[str, ...]:
+    """Return v6 context keys from most specific to most transferable.
+
+    This intentionally has a small fixed upper bound.  In particular, it does
+    not materialize every cross product of action, phase, and geometry.
+    """
+    context = str(context)
+    if context == "*":
+        return ("*",)
+    base, *raw_tokens = context.split("|")
+    tokens = {
+        key: value
+        for token in raw_tokens
+        for key, separator, value in (token.partition("="),)
+        if separator and key in {"rh", "ef", "ea"}
+    }
+    if not tokens:
+        return (base, "*")
+    phase = base.rsplit(":", 1)[-1]
+    relative = f"|rh={tokens['rh']}" if "rh" in tokens else ""
+    family = f"|ef={tokens['ef']}" if "ef" in tokens else ""
+    exact = f"|ea={tokens['ea']}" if "ea" in tokens else ""
+    keys = [f"{base}{relative}{family}{exact}"]
+    if family:
+        keys.append(f"{base}{relative}{family}")
+    keys.append(base)
+    if family:
+        keys.append(f"@phase:{phase}{family}")
+    keys.extend((f"@phase:{phase}", "*"))
+    return tuple(dict.fromkeys(keys))
 
 
 @dataclass
@@ -220,6 +285,68 @@ class ActionOutcomeModel:
             stats.startup_samples += 1
             stats.total_startup_to_hit += startup_to_hit
 
+    def record_sample(
+        self,
+        label: str,
+        context: str,
+        *,
+        damage: int,
+        self_damage: int,
+        spirit_cost: int,
+        commitment: int,
+        damage_bp: int,
+        self_damage_bp: int,
+        spirit_cost_bp: int,
+        displacement: float = 0.0,
+        action_changed: bool = False,
+        projectile_spawned: bool = False,
+        effectful: bool | None = None,
+        startup_to_hit: int | None = None,
+        terminal: str | None = None,
+    ) -> None:
+        """Fold one physical corpus outcome into every bounded backoff row."""
+        sample = dict(
+            damage=max(0, int(damage)),
+            self_damage=max(0, int(self_damage)),
+            spirit_cost=max(0, int(spirit_cost)),
+            commitment=max(1, int(commitment)),
+            damage_bp=max(0, int(damage_bp)),
+            self_damage_bp=max(0, int(self_damage_bp)),
+            spirit_cost_bp=max(0, int(spirit_cost_bp)),
+            displacement=max(0.0, float(displacement)),
+            action_changed=bool(action_changed),
+            projectile_spawned=bool(projectile_spawned),
+            effectful=(
+                bool(effectful)
+                if effectful is not None
+                else bool(
+                    damage
+                    or displacement >= 80.0
+                    or action_changed
+                    or projectile_spawned
+                )
+            ),
+            startup_to_hit=startup_to_hit,
+        )
+        for level in context_hierarchy(context):
+            stats = self.table.setdefault(level, {}).setdefault(
+                label, ActionOutcomeStats()
+            )
+            self._apply_sample(stats, **sample)
+            hierarchy_row = self.hierarchy.setdefault(level, {})
+            for key in action_hierarchy(label):
+                self._apply_sample(
+                    hierarchy_row.setdefault(key, ActionOutcomeStats()), **sample
+                )
+            if terminal == "win":
+                stats.terminal_win_credit += 1.0
+                for key in action_hierarchy(label):
+                    hierarchy_row[key].terminal_win_credit += 1.0
+            elif terminal == "loss":
+                stats.terminal_loss_credit += 1.0
+                for key in action_hierarchy(label):
+                    hierarchy_row[key].terminal_loss_credit += 1.0
+
     def _credit_recent_damage(self, *, frame: int, enemy_hp: int, me_hp: int) -> None:
         """Eligibility-trace credit for delayed projectiles and option aftermath."""
         enemy_drop = max(0, (self.last_observed_enemy_hp or enemy_hp) - enemy_hp)
@@ -234,7 +361,9 @@ class ActionOutcomeModel:
             horizon = 360 if recent.projectile_spawned else 150
             if age > horizon:
                 continue
-            source_weight = 2.5 if recent.projectile_spawned else 1.0 if recent.effectful else 0.35
+            source_weight = (
+                2.5 if recent.projectile_spawned else 1.0 if recent.effectful else 0.35
+            )
             weight = source_weight * (0.90 ** (age / 30.0))
             if weight > 0.01:
                 eligible.append((recent, weight))
@@ -245,7 +374,7 @@ class ActionOutcomeModel:
             share = weight / total_weight
             damage_credit = basis_points(enemy_drop, recent.max_enemy_hp) * share
             self_credit = basis_points(me_drop, recent.max_me_hp) * share
-            for context in dict.fromkeys((recent.context, "*")):
+            for context in context_hierarchy(recent.context):
                 for table, labels in (
                     (self.table, (recent.label,)),
                     (self.hierarchy, action_hierarchy(recent.label)),
@@ -369,31 +498,23 @@ class ActionOutcomeModel:
             else None
         )
         # Exact rows preserve the full online context. Hierarchy rows share
-        # evidence across action families/motions without changing raw corpus.
-        for context in dict.fromkeys((episode.context, "*")):
-            stats = self.table.setdefault(context, {}).setdefault(
-                episode.label, ActionOutcomeStats()
-            )
-            sample = dict(
-                damage=damage,
-                self_damage=self_damage,
-                spirit_cost=spirit_cost,
-                commitment=commitment,
-                damage_bp=damage_bp,
-                self_damage_bp=self_damage_bp,
-                spirit_cost_bp=spirit_cost_bp,
-                displacement=displacement,
-                action_changed=action_changed,
-                projectile_spawned=projectile_spawned,
-                effectful=effectful,
-                startup_to_hit=startup_to_hit,
-            )
-            self._apply_sample(stats, **sample)
-            hierarchy_row = self.hierarchy.setdefault(context, {})
-            for key in action_hierarchy(episode.label):
-                self._apply_sample(
-                    hierarchy_row.setdefault(key, ActionOutcomeStats()), **sample
-                )
+        # evidence across both action families and enemy situations.
+        self.record_sample(
+            episode.label,
+            episode.context,
+            damage=damage,
+            self_damage=self_damage,
+            spirit_cost=spirit_cost,
+            commitment=commitment,
+            damage_bp=damage_bp,
+            self_damage_bp=self_damage_bp,
+            spirit_cost_bp=spirit_cost_bp,
+            displacement=displacement,
+            action_changed=action_changed,
+            projectile_spawned=projectile_spawned,
+            effectful=effectful,
+            startup_to_hit=startup_to_hit,
+        )
         self.recent.append(
             RecentOutcome(
                 episode.label,
@@ -440,7 +561,7 @@ class ActionOutcomeModel:
             if age > 600:
                 continue
             credit = 0.85 ** (age / 120.0)
-            for context in dict.fromkeys((recent.context, "*")):
+            for context in context_hierarchy(recent.context):
                 for table, labels in (
                     (self.table, (recent.label,)),
                     (self.hierarchy, action_hierarchy(recent.label)),
@@ -459,10 +580,14 @@ class ActionOutcomeModel:
         self.last_observed_me_hp = None
 
     def stats_for(self, label: str, context: str) -> ActionOutcomeStats | None:
-        contextual = self.table.get(context, {}).get(label)
-        if contextual is not None and contextual.trials >= 2:
-            return contextual
-        return self.table.get("*", {}).get(label) or contextual
+        sparse: ActionOutcomeStats | None = None
+        for level in context_hierarchy(context):
+            contextual = self.table.get(level, {}).get(label)
+            if contextual is not None and contextual.trials >= 2:
+                return contextual
+            if sparse is None and contextual is not None:
+                sparse = contextual
+        return sparse
 
     def estimate(
         self,
@@ -470,25 +595,34 @@ class ActionOutcomeModel:
         context: str,
         reward_config: RewardConfig | None = None,
     ) -> ActionEstimate:
-        """Shrink sparse exact actions toward motion and family evidence."""
+        """Shrink exact decisions through action and enemy-context hierarchies."""
         config = reward_config or RewardConfig()
-        sources: list[tuple[ActionOutcomeStats | None, float]] = [
-            (self.hierarchy.get("*", {}).get(action_hierarchy(label)[0]), 4.0),
-            (self.hierarchy.get(context, {}).get(action_hierarchy(label)[0]), 6.0),
-        ]
-        for key in action_hierarchy(label)[1:]:
-            sources.extend(
+        action_levels = action_hierarchy(label)
+        context_levels = tuple(reversed(context_hierarchy(context)))
+        sources: list[tuple[ActionOutcomeStats | None, float]] = []
+        for specificity, level in enumerate(context_levels):
+            # More-specific enemy evidence receives progressively more weight,
+            # while every source is capped so a shared prior cannot swamp a
+            # well-supported exact action response.
+            sources.append(
                 (
-                    (self.hierarchy.get("*", {}).get(key), 8.0),
-                    (self.hierarchy.get(context, {}).get(key), 10.0),
+                    self.hierarchy.get(level, {}).get(action_levels[0]),
+                    min(8.0, 2.0 + specificity),
                 )
             )
-        sources.extend(
-            (
-                (self.table.get("*", {}).get(label), 12.0),
-                (self.table.get(context, {}).get(label), 24.0),
+            for action_level in action_levels[1:]:
+                sources.append(
+                    (
+                        self.hierarchy.get(level, {}).get(action_level),
+                        min(14.0, 3.0 + 2.0 * specificity),
+                    )
+                )
+            sources.append(
+                (
+                    self.table.get(level, {}).get(label),
+                    min(24.0, 4.0 + 3.0 * specificity),
+                )
             )
-        )
         weighted = 0.0
         support = 0.0
         for stats, cap in sources:
@@ -497,14 +631,11 @@ class ActionOutcomeModel:
             weight = min(cap, float(stats.trials))
             weighted += self.empirical_value(stats, config) * weight
             support += weight
-        family = action_hierarchy(label)[0]
-        population = int(
-            getattr(self.hierarchy.get(context, {}).get(family), "trials", 0)
-            + getattr(self.hierarchy.get("*", {}).get(family), "trials", 0)
-        )
+        family = action_levels[0]
+        population = int(getattr(self.hierarchy.get("*", {}).get(family), "trials", 0))
         return ActionEstimate(
             utility=weighted / support if support else 0.0,
-            effective_trials=support,
+            effective_trials=min(72.0, support),
             population_trials=population,
         )
 

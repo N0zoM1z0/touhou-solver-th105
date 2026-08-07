@@ -103,6 +103,7 @@ class OptionTransitionRecorderTests(unittest.TestCase):
             combat_option="attack",
             legal_combat_options=("attack", "approach", "defend"),
             combat_option_probability=0.8,
+            learning_context=("close:ground:field:recovery|rh=level|ef=strike|ea=310"),
         )
         initial = battle()
         terminal = battle(enemy=fighter(x=500.0, vtable=0x5678, hp=0))
@@ -115,6 +116,7 @@ class OptionTransitionRecorderTests(unittest.TestCase):
         self.assertEqual(writer.rows[0]["outcome"]["terminal"], "win")
         self.assertEqual(writer.rows[0]["legal_actions"], ["attack", "guard"])
         self.assertEqual(writer.rows[0]["combat_option"], "attack")
+        self.assertIn("|ea=310", writer.rows[0]["learning_context"])
         self.assertEqual(
             writer.rows[0]["legal_combat_options"],
             ["approach", "attack", "defend"],
