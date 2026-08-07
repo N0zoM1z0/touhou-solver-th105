@@ -31,7 +31,7 @@ class OfflineArtifactTests(unittest.TestCase):
         )
         self.assertEqual(
             context,
-            "lunatic:reimu@lunatic:close:ground:field:ea308:p1-3:h7-4",
+            "lunatic:reimu@lunatic:close:ground:field:left-wall:ea308:p1-3:h7-4",
         )
 
     def test_outcome_scalarization_preserves_safety_bias(self) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay reusable TH105 JSONL shards into v6 online model priors."""
+"""Replay reusable TH105 JSONL shards into current online model priors."""
 
 from __future__ import annotations
 
@@ -89,8 +89,8 @@ def main() -> int:
         entry["offline_replay_updated_at"] = time.time()
         characters[opponent] = entry
     knowledge["offline_replay"] = {
-        "version": 1,
-        "policy": "enemy-action-options-v6",
+        "version": 2,
+        "policy": "enemy-action-options-v7",
         "self_character": args.self_character,
         "transitions_seen": result.transitions_seen,
         "transitions_used": result.transitions_used,

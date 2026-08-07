@@ -1,4 +1,4 @@
-"""Rebuild v6 online outcome priors from reusable physical transitions."""
+"""Rebuild current online outcome priors from reusable physical transitions."""
 
 from __future__ import annotations
 
@@ -91,11 +91,25 @@ def replay_context(
     *,
     allow_saved: bool = True,
 ) -> str:
-    saved = record.get("learning_context")
-    if allow_saved and isinstance(saved, str) and "|ef=" in saved:
-        return saved
     state = _mapping(record.get("state"))
     me = _mapping(state.get("self"))
+    player_x = _integer(me, "x_q4") * 4.0
+    saved = record.get("learning_context")
+    if allow_saved and isinstance(saved, str) and "|ef=" in saved:
+        # Preserve the live action phase from old corpus rows, but canonicalize
+        # the new self-wall dimension from durable quantized native state.
+        base, *tokens = saved.split("|")
+        tokens = [token for token in tokens if not token.startswith("sz=")]
+        insert_at = 1 if tokens and tokens[0].startswith("rh=") else 0
+        self_zone = (
+            "left-wall"
+            if player_x <= 120.0
+            else "right-wall"
+            if player_x >= 1160.0
+            else "field"
+        )
+        tokens.insert(insert_at, f"sz={self_zone}")
+        return "|".join((base, *tokens))
     enemy = _mapping(state.get("enemy"))
     action_id = _integer(enemy, "action")
     raw_profile = profiles.get(str(action_id), {})
@@ -104,6 +118,7 @@ def replay_context(
         distance=abs(_integer(state, "relative_x_q4")) * 4.0,
         enemy_y=_integer(enemy, "y_q4") * 4.0,
         enemy_x=_integer(enemy, "x_q4") * 4.0,
+        player_x=player_x,
         player_y=_integer(me, "y_q4") * 4.0,
         phase=_action_phase(action_id, enemy, profile),
         enemy_action=(
@@ -184,7 +199,7 @@ def replay_transitions(
     *,
     self_character: str,
 ) -> ReplayResult:
-    """Build fresh v6 sufficient statistics without changing the raw corpus."""
+    """Build fresh sufficient statistics without changing the raw corpus."""
     offense_models: dict[str, ActionOutcomeModel] = {}
     option_models: dict[str, OptionOutcomeModel] = {}
     used = offense_samples = option_samples = 0

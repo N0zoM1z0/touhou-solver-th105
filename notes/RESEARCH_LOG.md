@@ -412,3 +412,17 @@ Additional IDA names/comments: `get_game_config`, `g_game_config`,
   window. Spirit expenditure extends guard chains only while an actual guard
   intent and enemy attack are present, rather than mistaking Patchouli's own
   skill cost for block contact.
+- **Observed/fixed (v7, 2026-08-07)** long-lived neutral options could survive
+  into a new enemy startup, `reposition` remained legal while P1 was already
+  holding back into the wall, and a one-frame intrusive-projectile read gap
+  could release guard between hits. Native gates now interrupt stale options,
+  prune physically impossible retreat, keep an eight-frame pointer-keyed
+  projectile hazard cache plus ten-frame guard hysteresis, and arm a twelve-
+  frame guard chain on authoritative HP loss. The context hierarchy has an
+  independent bounded P1 wall zone; old action-schema-v4 corpus reconstructs
+  it from quantized P1 x during replay.
+- **Replayed/installed (v7, 2026-08-07)** 217,650 retained transition rows from
+  63 active/rotated/archive shards were deduplicated and routed by native P2
+  vtable. 68,640 usable transitions rebuilt 27,701 concrete-action and 21,054
+  high-level-option sufficient-statistic samples across 12 opponents without
+  mutating the corpus or discarding clean observation models.

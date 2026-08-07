@@ -190,12 +190,21 @@ def outcome_targets(record: dict[str, object]) -> dict[str, float]:
 
 def distillation_context(record: dict[str, object]) -> str:
     state = _mapping(record.get("state"))
+    me = _mapping(state.get("self"))
     enemy = _mapping(state.get("enemy"))
     relative_x = abs(_number(state, "relative_x_q4"))
     distance = "close" if relative_x < 20 else "mid" if relative_x < 65 else "far"
     altitude = "ground" if abs(_number(state, "relative_y_q4")) < 11 else "air"
     enemy_x = _number(enemy, "x_q4")
     corner = "corner" if enemy_x < 38 or enemy_x > 282 else "field"
+    self_x = _number(me, "x_q4")
+    self_zone = (
+        "left-wall"
+        if self_x <= 30
+        else "right-wall"
+        if self_x >= 290
+        else "field"
+    )
     projectiles = state.get("enemy_projectiles")
     projectile_count = len(projectiles) if isinstance(projectiles, list) else 0
     projectile_bucket = (
@@ -204,7 +213,7 @@ def distillation_context(record: dict[str, object]) -> str:
         else "p4-8" if projectile_count <= 8
         else "p9+"
     )
-    self_hp = int(_number(_mapping(state.get("self")), "hp_bp") // 1000)
+    self_hp = int(_number(me, "hp_bp") // 1000)
     enemy_hp = int(_number(enemy, "hp_bp") // 1000)
     return ":".join(
         (
@@ -213,6 +222,7 @@ def distillation_context(record: dict[str, object]) -> str:
             distance,
             altitude,
             corner,
+            self_zone,
             f"ea{int(_number(enemy, 'action'))}",
             projectile_bucket,
             f"h{self_hp}-{enemy_hp}",

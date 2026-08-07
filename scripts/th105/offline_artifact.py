@@ -26,6 +26,7 @@ class _ContextFeatures:
     distance: int
     altitude: str
     corner: str
+    self_zone: str
     enemy_action: int
     projectiles: int
     self_hp: int
@@ -34,9 +35,24 @@ class _ContextFeatures:
 
 def _parse_context(context: str) -> _ContextFeatures | None:
     parts = context.split(":")
-    if len(parts) != 8:
+    if len(parts) == 8:
+        # Compatible read path for previously trained distilled artifacts.
+        difficulty, opponent, distance, altitude, corner, action, projectiles, hp = parts
+        self_zone = "unknown"
+    elif len(parts) == 9:
+        (
+            difficulty,
+            opponent,
+            distance,
+            altitude,
+            corner,
+            self_zone,
+            action,
+            projectiles,
+            hp,
+        ) = parts
+    else:
         return None
-    difficulty, opponent, distance, altitude, corner, action, projectiles, hp = parts
     if distance not in _DISTANCE_ORDINAL or projectiles not in _PROJECTILE_ORDINAL:
         return None
     if not action.startswith("ea") or not hp.startswith("h") or "-" not in hp:
@@ -49,6 +65,7 @@ def _parse_context(context: str) -> _ContextFeatures | None:
             distance=_DISTANCE_ORDINAL[distance],
             altitude=altitude,
             corner=corner,
+            self_zone=self_zone,
             enemy_action=int(action[2:]),
             projectiles=_PROJECTILE_ORDINAL[projectiles],
             self_hp=int(self_hp),
@@ -63,6 +80,12 @@ def _context_distance(left: _ContextFeatures, right: _ContextFeatures) -> float:
         2.0 * abs(left.distance - right.distance)
         + 3.0 * (left.altitude != right.altitude)
         + 1.5 * (left.corner != right.corner)
+        + (
+            2.5
+            if left.self_zone != right.self_zone
+            and "unknown" not in {left.self_zone, right.self_zone}
+            else 0.0
+        )
         + 4.0 * (left.enemy_action != right.enemy_action)
         + 1.5 * abs(left.projectiles - right.projectiles)
         + 0.35 * (abs(left.self_hp - right.self_hp) + abs(left.enemy_hp - right.enemy_hp))
@@ -75,6 +98,7 @@ def _bucket_context(
     opponent: str,
     relative_x_q4: float,
     relative_y_q4: float,
+    self_x_q4: float,
     enemy_x_q4: float,
     enemy_action: int,
     enemy_projectile_count: int,
@@ -88,6 +112,13 @@ def _bucket_context(
     )
     altitude = "ground" if abs(relative_y_q4) < 11 else "air"
     corner = "corner" if enemy_x_q4 < 38 or enemy_x_q4 > 282 else "field"
+    self_zone = (
+        "left-wall"
+        if self_x_q4 <= 30
+        else "right-wall"
+        if self_x_q4 >= 290
+        else "field"
+    )
     projectile_bucket = (
         "p0" if enemy_projectile_count == 0
         else "p1-3" if enemy_projectile_count <= 3
@@ -101,6 +132,7 @@ def _bucket_context(
             distance,
             altitude,
             corner,
+            self_zone,
             f"ea{enemy_action}",
             projectile_bucket,
             f"h{self_hp_bp // 1000}-{enemy_hp_bp // 1000}",
@@ -121,6 +153,7 @@ def live_distillation_context(
         opponent=opponent,
         relative_x_q4=round((float(enemy.x) - float(me.x)) / 4.0),
         relative_y_q4=round((float(enemy.y) - float(me.y)) / 4.0),
+        self_x_q4=round(float(me.x) / 4.0),
         enemy_x_q4=round(float(enemy.x) / 4.0),
         enemy_action=int(enemy.action_id),
         enemy_projectile_count=len(enemy_projectiles),

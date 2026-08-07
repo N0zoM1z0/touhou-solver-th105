@@ -352,25 +352,26 @@ Exact context/action rows are preferred; unseen states may only back off to a
 bounded nearest row for the same difficulty, opponent, and action. The lookup
 is cached and remains behind all native legality and safety gates.
 
-The online v6 policy also conditions compact option/action outcomes on the
-opponent's exact native action ID and learned action family. Sparse rows back
-off through same-family spatial context, the v5 context, phase, and global
-priors instead of creating an unbounded Cartesian table. Rebuild these online
-priors from reusable Patchouli transition shards without changing the corpus:
+The online v7 policy conditions compact option/action outcomes on the
+opponent's exact native action ID and learned action family, and separately
+tracks whether P1 is at either wall. Sparse rows back off through same-family
+spatial context, legacy context, phase, and global priors instead of creating
+an unbounded Cartesian table. Rebuild these online priors from reusable
+Patchouli transition shards without changing the corpus:
 
 ```bash
 python scripts/replay_th105_corpus.py \
   runtime/th105_transitions.jsonl runtime/th105_transitions.jsonl.*.gz \
+  runtime/corpus_archive/th105_transitions*.gz \
   --knowledge runtime/th105_opponent_models.json \
   --self-character 0x006B0EBC \
-  --reset-contaminated-observation-models \
   --output runtime/th105_replayed_models.json
 ```
 
 Inspect the replay manifest and model before atomically installing it as
-`runtime/th105_opponent_models.json`. New rows preserve the runtime's exact v6
+`runtime/th105_opponent_models.json`. New rows preserve the runtime's exact v7
 `learning_context`; older action-schema-v4 rows remain reusable with a
-conservative phase reconstruction.
+conservative phase reconstruction and self-zone recovery from P1 x.
 Replay routes every row by `state.enemy.character_vtable`, not by the cached
 top-level opponent label. This makes historical rows repairable if an older
 Arcade shell survived a roster transition. The optional reset flag clears

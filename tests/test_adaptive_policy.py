@@ -117,6 +117,87 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertGreaterEqual(len(decision.legal_combat_options or ()), 3)
         self.assertIn("|ef=neutral", decision.learning_context or "")
 
+    def test_retreat_option_is_pruned_at_the_back_wall(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        state = BattleState(
+            manager=1,
+            p1=_fighter(x=40.0, vtable=0x006B0EBC, facing=1),
+            p2=_fighter(x=600.0, vtable=0x006B18DC, facing=-1),
+        )
+        decision = policy.decide(
+            PolicyObservation(
+                frame=10,
+                state=state,
+                previous_state=None,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            )
+        )
+        self.assertNotIn("reposition", decision.legal_combat_options or ())
+        self.assertIn("|sz=left-wall", decision.learning_context or "")
+        self.assertEqual(policy.counts["native_pruned_option:reposition-wall"], 1)
+
+    def test_hp_loss_keeps_guard_armed_through_a_sensor_gap(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        healthy = BattleState(
+            manager=1,
+            p1=_fighter(x=200.0, vtable=0x006B0EBC, facing=1),
+            p2=_fighter(x=600.0, vtable=0x006B18DC, facing=-1),
+        )
+        policy.decide(
+            PolicyObservation(
+                frame=10,
+                state=healthy,
+                previous_state=None,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            )
+        )
+        damaged = replace(healthy, p1=replace(healthy.p1, hp=9500))
+        decision = policy.decide(
+            PolicyObservation(
+                frame=11,
+                state=damaged,
+                previous_state=healthy,
+                enemy_projectiles=(),
+                difficulty="lunatic",
+                opponent_key="0x006B18DC@lunatic",
+                exploration_rate=0.0,
+            )
+        )
+        self.assertEqual(decision.intent, "guard-chain-high")
+        self.assertEqual(decision.keys, frozenset({"left"}))
+        self.assertGreaterEqual(policy.guard_chain_until, 23)
+        self.assertGreaterEqual(policy.counts["combat_option_interrupted:hp-loss"], 1)
+
+    def test_projectile_hazard_cache_bridges_only_a_short_dropout(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        projectile = SimpleNamespace(
+            pointer=0x1234,
+            action_id=800,
+            attack_flags=1,
+            x=100.0,
+            y=50.0,
+            velocity_x=-4.0,
+            velocity_y=0.0,
+            acceleration_x=0.0,
+            acceleration_y=0.0,
+            facing=-1,
+            attack_boxes=((-10, -10, 10, 10),),
+        )
+        fresh = policy._hazards((projectile,), frame=10)
+        cached = policy._hazards((), frame=11)
+        expired = policy._hazards((), frame=19)
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(len(cached), 1)
+        self.assertEqual(cached[0].x, fresh[0].x - 4.0)
+        self.assertEqual(expired, ())
+        self.assertEqual(policy.projectile_hazard_cache, {})
+
     def test_offensive_enemy_action_conditions_the_learning_context(self) -> None:
         policy = AutonomousAdaptivePolicy()
         enemy = replace(

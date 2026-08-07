@@ -152,12 +152,15 @@ The first baseline is deliberately tabular and CPU-native:
 
 There is also a deterministic, low-cost replay baseline before fitted trees:
 `scripts/replay_th105_corpus.py` folds factual transition outcomes into fresh
-v6 `ActionOutcomeModel` and `OptionOutcomeModel` sufficient statistics. It
+current `ActionOutcomeModel` and `OptionOutcomeModel` sufficient statistics. It
 deduplicates transition IDs, maps generic motion/cancel intents back to runtime
 labels, groups consecutive micro intents into bounded option segments, and
 emits a separate knowledge artifact for inspection. This is a weight rebuild,
 not corpus mutation and not reward-dependent Q training.
 The row-native enemy character vtable is authoritative for opponent routing.
+Replay also derives the bounded P1 `left-wall` / `field` / `right-wall`
+dimension from each row's quantized native position, so the same v4 corpus can
+train v7 wall-aware option rows without a schema migration.
 `--reset-contaminated-observation-models` additionally removes temporal,
 projectile, defense, geometry, cancel, and coverage rows that cannot be
 faithfully reconstructed from an option-granularity corpus.

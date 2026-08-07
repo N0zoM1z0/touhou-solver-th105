@@ -96,6 +96,7 @@ class ActionOutcomeTests(unittest.TestCase):
             distance=70,
             enemy_y=100,
             enemy_x=400,
+            player_x=40,
             player_y=0,
             phase="active",
             enemy_action=410,
@@ -103,14 +104,39 @@ class ActionOutcomeTests(unittest.TestCase):
         )
         self.assertEqual(
             context,
-            "close:air:field:danger|rh=above|ef=projectile|ea=410",
+            "close:air:field:danger|rh=above|sz=left-wall|ef=projectile|ea=410",
         )
         levels = context_hierarchy(context)
         self.assertEqual(levels[0], context)
         self.assertIn("close:air:field:danger", levels)
         self.assertIn("@phase:danger|ef=projectile", levels)
         self.assertEqual(levels[-1], "*")
-        self.assertLessEqual(len(levels), 6)
+        self.assertIn("close:air:field:danger|sz=left-wall", levels)
+        self.assertLessEqual(len(levels), 8)
+
+    def test_self_wall_zone_is_separate_from_enemy_corner(self) -> None:
+        left = combat_context(
+            distance=500,
+            enemy_y=0,
+            enemy_x=600,
+            player_x=40,
+            player_y=0,
+            phase="neutral",
+            enemy_action_family="neutral",
+        )
+        field = combat_context(
+            distance=500,
+            enemy_y=0,
+            enemy_x=600,
+            player_x=400,
+            player_y=0,
+            phase="neutral",
+            enemy_action_family="neutral",
+        )
+        self.assertIn("|sz=left-wall", left)
+        self.assertIn("|sz=field", field)
+        self.assertNotEqual(context_hierarchy(left)[0], context_hierarchy(field)[0])
+        self.assertEqual(context_hierarchy(left)[-1], "*")
 
     def test_legacy_context_evidence_backs_off_for_unseen_enemy_action(self) -> None:
         model = ActionOutcomeModel()

@@ -20,6 +20,7 @@ def combat_context(
     enemy_y: float,
     enemy_x: float,
     phase: str,
+    player_x: float | None = None,
     player_y: float | None = None,
     enemy_action: int | None = None,
     enemy_action_family: str | None = None,
@@ -42,6 +43,18 @@ def combat_context(
             "above" if relative_y > 60.0 else "below" if relative_y < -60.0 else "level"
         )
         context += f"|rh={relative_height}"
+    if player_x is not None:
+        # The legacy ``corner`` bucket describes the opponent.  Keep an
+        # independent bounded self-zone so a learner can distinguish useful
+        # retreat from holding back into the arena wall.
+        self_zone = (
+            "left-wall"
+            if float(player_x) <= 120.0
+            else "right-wall"
+            if float(player_x) >= 1160.0
+            else "field"
+        )
+        context += f"|sz={self_zone}"
     if enemy_action_family is not None:
         family = (
             "".join(
@@ -71,16 +84,23 @@ def context_hierarchy(context: str) -> tuple[str, ...]:
         key: value
         for token in raw_tokens
         for key, separator, value in (token.partition("="),)
-        if separator and key in {"rh", "ef", "ea"}
+        if separator and key in {"rh", "sz", "ef", "ea"}
     }
     if not tokens:
         return (base, "*")
     phase = base.rsplit(":", 1)[-1]
     relative = f"|rh={tokens['rh']}" if "rh" in tokens else ""
+    self_zone = f"|sz={tokens['sz']}" if "sz" in tokens else ""
     family = f"|ef={tokens['ef']}" if "ef" in tokens else ""
     exact = f"|ea={tokens['ea']}" if "ea" in tokens else ""
-    keys = [f"{base}{relative}{family}{exact}"]
+    keys = [f"{base}{relative}{self_zone}{family}{exact}"]
     if family:
+        keys.append(f"{base}{relative}{self_zone}{family}")
+    if self_zone:
+        keys.append(f"{base}{self_zone}")
+    if family and self_zone:
+        # Old v6 corpora have no self-zone token.  Preserve that transferable
+        # row as a compatibility backoff while new exact rows learn wall play.
         keys.append(f"{base}{relative}{family}")
     keys.append(base)
     if family:

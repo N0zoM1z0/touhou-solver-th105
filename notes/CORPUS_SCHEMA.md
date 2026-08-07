@@ -45,10 +45,12 @@ new observation.
    rotations are capped; an offline compactor can later produce immutable
    stratified Parquet shards. The concrete training/deployment contract is in
    [`OFFLINE_TRAINING.md`](OFFLINE_TRAINING.md).
-   New v6 writers add an optional `learning_context` containing relative
-   height, learned enemy-action family, and exact offensive native action ID.
-   It is attribution metadata, not a new action vocabulary, so existing
-   action-schema-v4 rows stay compatible.
+   New writers add an optional `learning_context` containing relative height,
+   independent self wall/field position, learned enemy-action family, and exact
+   offensive native action ID. It is attribution metadata, not a new action
+   vocabulary, so existing action-schema-v4 rows stay compatible. Offline
+   replay reconstructs the self-zone token from the already durable quantized
+   P1 x coordinate for older rows.
 
 Damage is normalized to basis points of the observed maximum (`10000 == 100%`)
 while legacy raw counters remain present. This permits cross-character and

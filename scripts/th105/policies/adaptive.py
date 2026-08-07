@@ -61,6 +61,13 @@ PLAYSTYLE_TUNING: dict[str, dict[str, float]] = {
     },
 }
 
+ARENA_LEFT_X = 40.0
+ARENA_RIGHT_X = 1240.0
+RETREAT_ROOM = 32.0
+PROJECTILE_HAZARD_TTL_FRAMES = 8
+PROJECTILE_GUARD_HOLD_FRAMES = 10
+POST_DAMAGE_GUARD_FRAMES = 12
+
 
 # Keep the movement macros inside the policy plugin.  The resident battle shell
 # deliberately has a tiny stable ABI; importing newly-added helpers from an
@@ -185,6 +192,40 @@ def _hazard_projectiles(
         )
     except TypeError:
         return (HazardProjectile(projectile.x, projectile.y, velocity_x, velocity_y),)
+
+
+def _advance_hazard(
+    hazard: HazardProjectile, frames: int
+) -> HazardProjectile | None:
+    """Advance a copied projectile hazard across a short sensor dropout."""
+    age = max(0, int(frames))
+    active_start = (
+        max(1, hazard.active_start_frame - age)
+        if hazard.active_start_frame > age
+        else 0
+    )
+    if hazard.active_end_frame > 0:
+        if hazard.active_end_frame <= age:
+            return None
+        active_end = hazard.active_end_frame - age
+    else:
+        active_end = 0
+    return HazardProjectile(
+        hazard.x
+        + hazard.velocity_x * age
+        + 0.5 * hazard.acceleration_x * age * age,
+        hazard.y
+        + hazard.velocity_y * age
+        + 0.5 * hazard.acceleration_y * age * age,
+        hazard.velocity_x + hazard.acceleration_x * age,
+        hazard.velocity_y + hazard.acceleration_y * age,
+        half_width=hazard.half_width,
+        half_height=hazard.half_height,
+        acceleration_x=hazard.acceleration_x,
+        acceleration_y=hazard.acceleration_y,
+        active_start_frame=active_start,
+        active_end_frame=active_end,
+    )
 
 
 def _reset_model_episode(model: OpponentActionModel) -> None:
@@ -450,7 +491,7 @@ def _prune_legacy_coverage_scopes(explorer: CoverageExplorer) -> None:
 
 class AutonomousAdaptivePolicy:
     api_version = POLICY_API_VERSION
-    name = "enemy-action-options-v6"
+    name = "enemy-action-options-v7"
 
     def __init__(self) -> None:
         self.playstyle = "balanced"
@@ -518,6 +559,11 @@ class AutonomousAdaptivePolicy:
         self.defense_legal_actions: tuple[str, ...] | None = None
         self.defense_behavior_probability = 1.0
         self.guard_chain_until = 0
+        self.projectile_guard_until = 0
+        self.projectile_hazard_cache: dict[
+            int, tuple[int, tuple[HazardProjectile, ...]]
+        ] = {}
+        self.projectile_cache_hits = 0
         self.hazard_calls = 0
         self.hazard_total_ns = 0
         self.hazard_max_ns = 0
@@ -605,15 +651,79 @@ class AutonomousAdaptivePolicy:
         self.cancel_graph_knowledge_seeded = True
         self.coverage_knowledge_seeded = True
 
-    def _hazards(self, projectiles) -> tuple[HazardProjectile, ...]:
-        return tuple(
-            hazard
-            for projectile in projectiles
-            for hazard in _hazard_projectiles(
+    def _hazards(
+        self, projectiles, *, frame: int
+    ) -> tuple[HazardProjectile, ...]:
+        """Return current hazards plus a short pointer-verified dropout cache."""
+        hazards: list[HazardProjectile] = []
+        observed: set[int] = set()
+        for projectile in projectiles:
+            pointer = int(getattr(projectile, "pointer", 0) or 0)
+            if pointer > 0:
+                observed.add(pointer)
+            fresh = _hazard_projectiles(
                 projectile,
                 self.projectile_envelopes.extent_for(projectile.action_id),
             )
-        )
+            if fresh:
+                hazards.extend(fresh)
+                if pointer > 0:
+                    self.projectile_hazard_cache[pointer] = (frame, fresh)
+                continue
+            if pointer <= 0:
+                continue
+            cached = self.projectile_hazard_cache.get(pointer)
+            # A still-present object with an unambiguously inactive frame ends
+            # its cache. Non-zero attack flags plus an empty vector can be a
+            # torn frame-data read, so bridge only that bounded case.
+            if not int(getattr(projectile, "attack_flags", 0) or 0):
+                self.projectile_hazard_cache.pop(pointer, None)
+                continue
+            if cached is not None:
+                cached_frame, cached_hazards = cached
+                if frame - cached_frame > PROJECTILE_HAZARD_TTL_FRAMES:
+                    del self.projectile_hazard_cache[pointer]
+                    continue
+                advanced = tuple(
+                    value
+                    for hazard in cached_hazards
+                    if (value := _advance_hazard(hazard, frame - cached_frame))
+                    is not None
+                )
+                hazards.extend(advanced)
+                self.projectile_cache_hits += len(advanced)
+
+        for pointer, (cached_frame, cached_hazards) in tuple(
+            self.projectile_hazard_cache.items()
+        ):
+            if pointer in observed:
+                continue
+            age = frame - cached_frame
+            if age > PROJECTILE_HAZARD_TTL_FRAMES:
+                del self.projectile_hazard_cache[pointer]
+                continue
+            advanced = tuple(
+                value
+                for hazard in cached_hazards
+                if (value := _advance_hazard(hazard, age)) is not None
+            )
+            if not advanced:
+                del self.projectile_hazard_cache[pointer]
+                continue
+            hazards.extend(advanced)
+            self.projectile_cache_hits += len(advanced)
+        return tuple(hazards)
+
+    def _interrupt_combat_option(self, frame: int, reason: str) -> None:
+        """End a strategic commitment when a native safety gate takes over."""
+        if self.active_combat_option is None:
+            return
+        self.option_outcomes.finish(frame)
+        self.counts[f"combat_option_interrupted:{reason}"] += 1
+        self.active_combat_option = None
+        self.combat_option_until = 0
+        self.combat_option_legal_actions = None
+        self.combat_option_behavior_probability = 1.0
 
     def _enemy_melee_hazards(
         self, observation: PolicyObservation
@@ -718,6 +828,7 @@ class AutonomousAdaptivePolicy:
             distance=abs(float(enemy.x) - float(me.x)),
             enemy_y=float(enemy.y),
             enemy_x=float(enemy.x),
+            player_x=float(me.x),
             player_y=float(me.y),
             phase=phase or self.last_assessment.phase,
             enemy_action=(
@@ -810,11 +921,16 @@ class AutonomousAdaptivePolicy:
         distance: float,
         spirit: int,
         confirmed_punish: bool,
+        can_reposition: bool,
     ) -> str:
         """Learn safe high-level intent; native danger gates run before this."""
         me, enemy = observation.state.p1, observation.state.p2
         context = self._combat_outcome_context(observation)
-        legal = ["defend", "reposition"]
+        legal = ["defend"]
+        if can_reposition:
+            legal.append("reposition")
+        else:
+            self.counts["native_pruned_option:reposition-wall"] += 1
         if distance > 72.0:
             legal.append("approach")
         if self.attack_cooldown == 0 and me.action_id < 50:
@@ -1360,6 +1476,11 @@ class AutonomousAdaptivePolicy:
             else ("right" if me.x < enemy.x else "left")
         )
         back = "left" if toward == "right" else "right"
+        can_reposition = (
+            me.x > ARENA_LEFT_X + RETREAT_ROOM
+            if back == "left"
+            else me.x < ARENA_RIGHT_X - RETREAT_ROOM
+        )
         distance = abs(enemy.x - me.x)
         spirit = int(getattr(me, "spirit", 1000))
         previous_enemy_hp = (
@@ -1443,6 +1564,8 @@ class AutonomousAdaptivePolicy:
             self.evade_queue.clear()
             self.defense_responses.discard_episode()
             self.guard_chain_until = 0
+            self.projectile_guard_until = 0
+            self.projectile_hazard_cache.clear()
             self.combo_confirm_deadline = 0
             self.hit_confirm_until = 0
             self.active_combat_option = None
@@ -1498,6 +1621,33 @@ class AutonomousAdaptivePolicy:
             "unknown",
             "spell-danger",
         }
+        active_option_episode = self.option_outcomes.episode
+        if (
+            enemy_attacking
+            and me.action_id < 50
+            and not self.queue
+            and self.active_combat_option is not None
+            and active_option_episode is not None
+        ):
+            prior_context = active_option_episode.context
+            current_context = self._current_combat_context or ""
+
+            def enemy_action_token(context: str) -> str | None:
+                for token in context.split("|")[1:]:
+                    if token.startswith("ea="):
+                        return token
+                return None
+
+            if (
+                ":danger" not in prior_context.split("|", 1)[0]
+                or enemy_action_token(prior_context)
+                != enemy_action_token(current_context)
+            ):
+                # A neutral commitment must not survive into a newly observed
+                # enemy startup. Re-rank the fresh exact-action context below.
+                self._interrupt_combat_option(
+                    observation.frame, "enemy-context-change"
+                )
         enemy_attack_flags = int(getattr(enemy, "attack_flags", 0))
         me_in_hit_reaction = 50 <= me.action_id < 200
         previous_me = (
@@ -1581,6 +1731,15 @@ class AutonomousAdaptivePolicy:
 
         if took_damage:
             damage = self.last_me_hp - me.hp
+            # Some projectile/chip contacts leave the native action ID in a
+            # neutral range. HP loss itself is authoritative evidence: keep
+            # guard armed through the next hits even when animation sensing
+            # cannot prove hit stun.
+            self.guard_chain_until = max(
+                self.guard_chain_until,
+                observation.frame + POST_DAMAGE_GUARD_FRAMES,
+            )
+            self._interrupt_combat_option(observation.frame, "hp-loss")
             nearest_damage_projectile = min(
                 observation.enemy_projectiles,
                 key=lambda projectile: math.hypot(
@@ -1636,8 +1795,11 @@ class AutonomousAdaptivePolicy:
         airborne_threat = False
         nearest = math.inf
         evade_choice: str | None = None
+        eligible: list[tuple[float, str]] = []
         risk_safe: dict[str, bool] = {}
-        projectile_hazards = self._hazards(observation.enemy_projectiles)
+        projectile_hazards = self._hazards(
+            observation.enemy_projectiles, frame=observation.frame
+        )
         melee_hazards = self._enemy_melee_hazards(observation)
         hazards = projectile_hazards + melee_hazards
         for projectile in projectile_hazards:
@@ -1752,7 +1914,7 @@ class AutonomousAdaptivePolicy:
                 )
             labels = tuple(label for label, _candidate in labeled_candidates)
             candidates = tuple(candidate for _label, candidate in labeled_candidates)
-            risk_horizon = 30
+            risk_horizon = 45
             risk = self._evaluate_hazard(
                 player_x,
                 player_y,
@@ -1763,7 +1925,6 @@ class AutonomousAdaptivePolicy:
                 horizon=risk_horizon,
                 collision_margin=5.0,
             )
-            eligible: list[tuple[float, str]] = []
             for label, candidate, result in zip(labels, candidates, risk):
                 if label == "stay" or not result.safe or me.action_id >= 50:
                     continue
@@ -1790,6 +1951,8 @@ class AutonomousAdaptivePolicy:
                 "backend": self.hazard.backend,
                 "native_attack_boxes": len(hazards),
                 "projectile_attack_boxes": len(projectile_hazards),
+                "projectile_cache_entries": len(self.projectile_hazard_cache),
+                "projectile_cache_hits": self.projectile_cache_hits,
                 "predicted_melee_boxes": len(melee_hazards),
                 "predicted_melee_start": (
                     min(hazard.active_start_frame for hazard in melee_hazards)
@@ -1811,12 +1974,26 @@ class AutonomousAdaptivePolicy:
                 **{f"{label}_safe": result.safe for label, result in zip(labels, risk)},
             }
             # A projectile that is inside the coarse proximity window but has
-            # no collision on the stationary 10-frame path should not force a
+            # no collision on the stationary finite-horizon path should not force a
             # long guard. This removes false positives from receding knives.
             if not risk[0].safe:
                 projectile_threat = True
             elif risk[0].minimum_clearance > 8.0:
                 projectile_threat = False
+
+        if projectile_threat:
+            self.projectile_guard_until = max(
+                self.projectile_guard_until,
+                observation.frame + PROJECTILE_GUARD_HOLD_FRAMES,
+            )
+        elif (
+            self.projectile_guard_until > 0
+            and observation.frame <= self.projectile_guard_until
+        ):
+            # Do not release defense because an intrusive projectile list or
+            # one frame-data vector disappeared for a single sample.
+            projectile_threat = True
+            self.counts["projectile_guard_hysteresis_frames"] += 1
 
         # Enumerate only physically feasible movement responses. Which feasible
         # response is preferred remains entirely outcome-learned per signature.
@@ -1910,6 +2087,7 @@ class AutonomousAdaptivePolicy:
                 cancel_hypothesis = self._start_cancel_hypothesis(observation, toward)
 
         if me_in_hit_reaction:
+            self._interrupt_combat_option(observation.frame, "hit-reaction")
             self.queue.clear()
             self.evade_queue.clear()
             self.combo_confirm_deadline = 0
@@ -1930,6 +2108,7 @@ class AutonomousAdaptivePolicy:
             # Defense-first: a strike startup invalidates any not-yet-active
             # motion or dodge macro. Facing-based guard takes priority over all
             # queued offense and prevents the first hit of a full chain.
+            self._interrupt_combat_option(observation.frame, "melee-threat")
             self.queue.clear()
             self.combo_confirm_deadline = 0
             response = (
@@ -2020,11 +2199,10 @@ class AutonomousAdaptivePolicy:
                 low = response == "low_guard"
                 keys = {back, "down"} if low else {back}
                 intent = "strike-guard-low" if low else "strike-guard-high"
-        elif observation.frame <= self.guard_chain_until and (
-            distance < 280.0 or hazards or enemy_attacking
-        ):
+        elif self.guard_chain_until > 0 and observation.frame <= self.guard_chain_until:
             # Do not release back between hits. Many strings briefly return to
             # a non-active pose while the next hit is already buffered.
+            self._interrupt_combat_option(observation.frame, "guard-chain")
             self.queue.clear()
             response = (
                 self.defense_responses.episode.response
@@ -2057,6 +2235,7 @@ class AutonomousAdaptivePolicy:
                 self.evade_legal_actions = None
                 self.evade_behavior_probability = 1.0
         elif projectile_threat:
+            self._interrupt_combat_option(observation.frame, "projectile-threat")
             self.queue.clear()
             self.combo_confirm_deadline = 0
             self.counts["projectile_guards"] += 1
@@ -2129,6 +2308,7 @@ class AutonomousAdaptivePolicy:
             # We do not spend S/D spell cards yet, but enemy spell actions are
             # always modelled as high commitment danger.  Wait for native
             # projectile geometry instead of trying to steal an early turn.
+            self._interrupt_combat_option(observation.frame, "enemy-spell")
             self.queue.clear()
             keys = {back} if me.y < 8.0 else {back, "a"}
             intent = "enemy-spell-defend"
@@ -2141,6 +2321,7 @@ class AutonomousAdaptivePolicy:
             # projectile object necessarily exists, but only inside a learned
             # imminent-threat window. Geometry takes over as soon as an object
             # or melee box is observable.
+            self._interrupt_combat_option(observation.frame, "ranged-startup")
             self.queue.clear()
             self.combo_confirm_deadline = 0
             keys = {back}
@@ -2161,6 +2342,7 @@ class AutonomousAdaptivePolicy:
                 distance=distance,
                 spirit=spirit,
                 confirmed_punish=confirmed_punish,
+                can_reposition=can_reposition,
             )
             selected = None
             if option == "punish":
@@ -2265,6 +2447,11 @@ class AutonomousAdaptivePolicy:
             "evade_queued_frames": len(self.evade_queue),
             "hazard_backend": self.hazard.backend,
             "last_risk": self.last_risk,
+            "projectile_hazard_cache": {
+                "entries": len(self.projectile_hazard_cache),
+                "hits": self.projectile_cache_hits,
+                "guard_until": self.projectile_guard_until,
+            },
             "observed_own_projectiles": self.last_own_projectile_count,
             "projectile_envelopes": self.projectile_envelopes.metrics(),
             "projectile_envelope_state": self.projectile_envelopes.export_state(),

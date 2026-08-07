@@ -85,6 +85,7 @@ class OfflineReplayTests(unittest.TestCase):
         state = result.opponents["0x006B165C@unknown"]["offense_outcomes"]
         exact_contexts = [key for key in state if "|ea=310" in key]
         self.assertEqual(len(exact_contexts), 1)
+        self.assertIn("|sz=field", exact_contexts[0])
         row = state[exact_contexts[0]]
         self.assertEqual(row["motion:0x006B0EBC:236B"]["trials"], 1)
 
