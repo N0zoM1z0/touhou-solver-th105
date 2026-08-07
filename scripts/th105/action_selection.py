@@ -47,6 +47,7 @@ class CoverageExplorer:
         exploration_rate: float,
         minimum_rate: float = 0.015,
         decay_decisions: float = 80.0,
+        coverage_keys: dict[str, str] | None = None,
     ) -> ActionSelection:
         if not scores:
             raise ValueError("at least one legal action is required")
@@ -62,9 +63,12 @@ class CoverageExplorer:
                 1.0 + support / decay
             )
         normalized_scores = {action: float(scores[action]) for action in legal}
+        normalized_coverage_keys = {
+            action: str((coverage_keys or {}).get(action, action)) for action in legal
+        }
         greedy = max(legal, key=lambda action: (normalized_scores[action], action))
-        for action in legal:
-            self.opportunities[self._key(scope, action)] += 1
+        for coverage_action in set(normalized_coverage_keys.values()):
+            self.opportunities[self._key(scope, coverage_action)] += 1
 
         if len(legal) == 1 or bounded_rate <= 0.0:
             probabilities = {action: 0.0 for action in legal}
@@ -74,7 +78,13 @@ class CoverageExplorer:
             # the exploration mass without allowing a one-off action to
             # dominate forever.
             weights = {
-                action: 1.0 / math.sqrt(1.0 + self.selected[self._key(scope, action)])
+                action: 1.0
+                / math.sqrt(
+                    1.0
+                    + self.selected[
+                        self._key(scope, normalized_coverage_keys[action])
+                    ]
+                )
                 for action in legal
             }
             total = sum(weights.values())
@@ -91,7 +101,7 @@ class CoverageExplorer:
             if draw <= cumulative:
                 chosen = action
                 break
-        self.selected[self._key(scope, chosen)] += 1
+        self.selected[self._key(scope, normalized_coverage_keys[chosen])] += 1
         self.scope_decisions[scope] += 1
         self.decisions += 1
         if chosen != greedy:

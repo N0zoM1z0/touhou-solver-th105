@@ -17,6 +17,7 @@ from th105.policies.adaptive import (
     _human_demonstration_utility,
     _pattern_has_advancing_attack,
     _native_guard_response,
+    _prune_legacy_coverage_scopes,
 )
 from th105.motion import generated_attack_probe_hypotheses, generated_motion_hypotheses
 from th105.offense_learning import ActionOutcomeModel
@@ -52,6 +53,22 @@ def _fighter(*, x: float, vtable: int, facing: int) -> FighterState:
 
 
 class AdaptiveNativeGeometryTests(unittest.TestCase):
+    def test_coverage_migration_drops_full_context_scopes(self) -> None:
+        policy = AutonomousAdaptivePolicy()
+        explorer = policy.coverage_explorer
+        explorer.selected["attack:lunatic:opponent:far|x"] = 3
+        explorer.selected["attack:far:ground:neutral|x"] = 2
+        explorer.opportunities.update(explorer.selected)
+        explorer.scope_decisions["attack:lunatic:opponent:far"] = 3
+        explorer.scope_decisions["attack:far:ground:neutral"] = 2
+        _prune_legacy_coverage_scopes(explorer)
+        self.assertEqual(
+            explorer.selected, {"attack:far:ground:neutral|x": 2}
+        )
+        self.assertEqual(
+            explorer.scope_decisions, {"attack:far:ground:neutral": 2}
+        )
+
     def test_neutral_decision_exposes_complete_native_gated_set(self) -> None:
         policy = AutonomousAdaptivePolicy()
         state = BattleState(

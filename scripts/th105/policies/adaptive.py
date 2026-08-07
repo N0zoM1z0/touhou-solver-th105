@@ -387,6 +387,35 @@ def _probe_is_empirically_unsafe(model: object, label: str, context: str) -> boo
     return punished_rate >= 0.6 and self_damage > max(250.0, damage * 0.8)
 
 
+def _prune_legacy_coverage_scopes(explorer: CoverageExplorer) -> None:
+    """Drop pre-v5/full-context counters after their one-way migration."""
+    distances = {"close", "mid", "far"}
+    altitudes = {"ground", "air"}
+    phases = {"danger", "advantage", "neutral"}
+
+    def valid(scope: str) -> bool:
+        parts = scope.split(":")
+        return (
+            len(parts) == 4
+            and bool(parts[0])
+            and parts[1] in distances
+            and parts[2] in altitudes
+            and parts[3] in phases
+        )
+
+    for counter_name in ("selected", "opportunities"):
+        counter = getattr(explorer, counter_name, None)
+        if isinstance(counter, Counter):
+            for key in tuple(counter):
+                if not valid(str(key).partition("|")[0]):
+                    del counter[key]
+    scope_decisions = getattr(explorer, "scope_decisions", None)
+    if isinstance(scope_decisions, Counter):
+        for scope in tuple(scope_decisions):
+            if not valid(str(scope)):
+                del scope_decisions[scope]
+
+
 class AutonomousAdaptivePolicy:
     api_version = POLICY_API_VERSION
     name = "hierarchical-options-v5"
@@ -532,6 +561,7 @@ class AutonomousAdaptivePolicy:
         self.motion_probe_cooldown = int(state.get("motion_probe_cooldown", 0))
         self.hit_confirm_until = int(state.get("hit_confirm_until", 0))
         self.coverage_explorer.import_state(state.get("coverage_explorer", {}))
+        _prune_legacy_coverage_scopes(self.coverage_explorer)
         # A hot-reload state is newer than the encounter-start disk prior.
         # Prevent the first decide() of the new generation from overwriting it.
         self.projectile_knowledge_seeded = True
@@ -661,14 +691,27 @@ class AutonomousAdaptivePolicy:
         )
         # The rich distillation context remains in the raw transition. Online
         # coverage uses a bounded scope so visits survive and actually converge.
-        coverage_scope = f"{family}:{distance_bucket}:{altitude}:{phase_bucket}"
-        minimum_rate = 0.005 if family == "defense" else 0.01 if family == "combat-option" else 0.02
+        scope_family = family.split(":", 1)[0]
+        coverage_scope = (
+            f"{scope_family}:{distance_bucket}:{altitude}:{phase_bucket}"
+        )
+        coverage_keys: dict[str, str] = {}
+        for action in combined:
+            if action.startswith("learned-cancel:"):
+                parts = action.removeprefix("learned-cancel:").split("|")
+                coverage_keys[action] = (
+                    f"learned-cancel-input:{parts[1]}" if len(parts) >= 2 else action
+                )
+            else:
+                coverage_keys[action] = action
+        minimum_rate = 0.005 if scope_family == "defense" else 0.01 if scope_family == "combat-option" else 0.02
         selection = self.coverage_explorer.choose(
             coverage_scope,
             combined,
             exploration_rate=float(getattr(observation, "exploration_rate", 0.08)),
             minimum_rate=minimum_rate,
-            decay_decisions=60.0 if family == "combat-option" else 90.0,
+            decay_decisions=60.0 if scope_family == "combat-option" else 90.0,
+            coverage_keys=coverage_keys,
         )
         self._decision_legal_actions = selection.legal_actions
         self._decision_probability = selection.behavior_probability
@@ -1311,6 +1354,7 @@ class AutonomousAdaptivePolicy:
             self.coverage_explorer.import_state(
                 getattr(observation, "prior_coverage_explorer", {}) or {}
             )
+            _prune_legacy_coverage_scopes(self.coverage_explorer)
             self.coverage_knowledge_seeded = True
         if not self.human_knowledge_seeded:
             prior_human = getattr(observation, "prior_human_demonstrations", {})

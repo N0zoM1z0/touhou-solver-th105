@@ -51,6 +51,17 @@ class CoverageExplorerTests(unittest.TestCase):
         self.assertLess(last.exploration_rate, first.exploration_rate)
         self.assertGreaterEqual(last.exploration_rate, 0.015)
 
+    def test_equivalent_exact_edges_share_one_coverage_counter(self) -> None:
+        explorer = CoverageExplorer(seed=5)
+        explorer.choose(
+            "cancel:mid:ground:advantage",
+            {"edge-a": 1.0, "edge-b": 0.0},
+            exploration_rate=0.5,
+            coverage_keys={"edge-a": "input:z", "edge-b": "input:z"},
+        )
+        self.assertEqual(len(explorer.opportunities), 1)
+        self.assertEqual(len(explorer.selected), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
