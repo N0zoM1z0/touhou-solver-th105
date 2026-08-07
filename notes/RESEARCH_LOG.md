@@ -365,3 +365,25 @@ Additional IDA names/comments: `get_game_config`, `g_game_config`,
   versions in `notes/CORPUS_SCHEMA.md`. Raw sufficient statistics are durable;
   reward/Q/ranks are disposable derivatives, keeping the corpus reusable by a
   later offline RL or server-trained model.
+- **Observed/fixed (Patchouli Lunatic, 2026-08-07)** coverage counters were
+  exported by the plugin but omitted from durable per-opponent knowledge. They
+  are now checkpointed, restored, and keyed by a bounded family/distance/
+  altitude/phase scope. Exact learned-cancel edges sharing one input chord use
+  one coverage counter, while their outcome rows and raw legal set remain
+  distinct. Legacy full-context counters are discarded on import.
+- **Implemented** sparse exact action values now shrink through per-opponent
+  family and motion/cancel-input sufficient statistics. UCB uses that effective
+  support with a finite pseudo-count and a capped bonus instead of assigning
+  every unseen exact variant utility 2000. Explicit legal-set exploration
+  decays from the collection rate toward a small family-specific floor.
+- **Implemented** safe neutral play is an n-step option bandit over `defend`,
+  `reposition`, `approach`, `attack`, and `punish`. Native hit reaction,
+  projectile/melee hazard, guard-chain, spell, and commitment branches retain
+  veto priority. Both the high-level legal option set/propensity and exact
+  micro-action set/propensity are stored in each transition.
+- **Implemented/validated live** completed offense and option rows retain a
+  360-frame projectile-weighted eligibility trace for delayed damage. The first
+  live v5 Patchouli/Komachi round completed with the opponent at 53.7% HP;
+  60-second checkpoints contained both coverage and option models, the next
+  Arcade opponent loaded without a policy error, and all five high-level
+  options appeared in the fresh transition stream.
