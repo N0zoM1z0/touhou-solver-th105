@@ -25,6 +25,8 @@ class PolicyObservation:
     prior_human_demonstrations: dict[str, object] = field(default_factory=dict)
     prior_attack_geometry: dict[str, object] = field(default_factory=dict)
     prior_cancel_graph: dict[str, object] = field(default_factory=dict)
+    prior_coverage_explorer: dict[str, object] = field(default_factory=dict)
+    prior_option_model: dict[str, object] = field(default_factory=dict)
     prior_offline_policy: dict[str, object] = field(default_factory=dict)
     difficulty: str = "unknown"
     opponent_key: str = "unknown"
@@ -44,6 +46,11 @@ class PolicyDecision:
     # exactly. Unknown is represented by None; it must never be guessed.
     legal_actions: tuple[str, ...] | None = None
     behavior_probability: float = 1.0
+    # Nested strategic decision. The ordinary action fields remain the exact
+    # native-gated micro action for backward-compatible offline corpora.
+    combat_option: str | None = None
+    legal_combat_options: tuple[str, ...] | None = None
+    combat_option_probability: float = 1.0
 
 
 class CombatPolicy(Protocol):

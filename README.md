@@ -211,6 +211,16 @@ self-damage, spirit cost, and commitment, exploits good results, and retains a
 shrinking exploration bonus. This works without a human corpus; demonstrations
 only improve cold-start ordering.
 
+The live policy is hierarchical. Per-opponent exact action rows shrink toward
+shared action-family and motion evidence, while coverage uses a persistent,
+coarse combat scope and an epsilon schedule that decays toward a small floor.
+Safe neutral frames choose a learned `defend`, `reposition`, `approach`,
+`attack`, or `punish` option; native hit-stun, hazard, guard, and commitment
+checks remain hard vetoes. Projectile-producing actions retain a bounded
+eligibility trace so delayed hits can be credited after their input macro has
+ended. Raw transitions still retain the richer state and both micro-action and
+high-level legal sets for future offline training.
+
 Event-aligned intent transitions are staged in the bounded, compressed
 `runtime/th105_transitions.jsonl` corpus with raw outcome components and
 versioned state/action schemas; this does not alter the live decision path.

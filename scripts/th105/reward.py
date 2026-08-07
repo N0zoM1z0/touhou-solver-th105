@@ -140,9 +140,15 @@ def empirical_action_value(
         - float(getattr(stats, "terminal_loss_credit", 0.0))
     ) / trials
     effect_rate = float(getattr(stats, "effectful_trials", 0)) / trials
+    delayed_damage_bp = float(
+        getattr(stats, "delayed_damage_credit_bp", 0.0)
+    ) / trials
+    delayed_self_damage_bp = float(
+        getattr(stats, "delayed_self_damage_credit_bp", 0.0)
+    ) / trials
     return (
-        config.damage_weight * damage_bp
-        - config.self_damage_weight * self_damage_bp
+        config.damage_weight * (damage_bp + 0.65 * delayed_damage_bp)
+        - config.self_damage_weight * (self_damage_bp + 0.65 * delayed_self_damage_bp)
         - config.spirit_weight * spirit_bp
         - config.whiff_cost_bp * max(0, trials - connections) / trials
         - config.punished_cost_bp * punished / trials

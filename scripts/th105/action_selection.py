@@ -15,6 +15,7 @@ class ActionSelection:
     behavior_probability: float
     greedy_action: str
     scores: dict[str, float]
+    exploration_rate: float = 0.0
 
 
 class CoverageExplorer:
@@ -30,6 +31,7 @@ class CoverageExplorer:
         self.random = random.Random(self.seed)
         self.selected: Counter[str] = Counter()
         self.opportunities: Counter[str] = Counter()
+        self.scope_decisions: Counter[str] = Counter()
         self.decisions = 0
         self.exploratory_decisions = 0
 
@@ -43,11 +45,22 @@ class CoverageExplorer:
         scores: dict[str, float],
         *,
         exploration_rate: float,
+        minimum_rate: float = 0.015,
+        decay_decisions: float = 80.0,
     ) -> ActionSelection:
         if not scores:
             raise ValueError("at least one legal action is required")
         legal = tuple(sorted({str(action) for action in scores}))
-        bounded_rate = max(0.0, min(1.0, float(exploration_rate)))
+        requested_rate = max(0.0, min(1.0, float(exploration_rate)))
+        if requested_rate <= 0.0:
+            bounded_rate = 0.0
+        else:
+            floor = min(requested_rate, max(0.0, float(minimum_rate)))
+            decay = max(1.0, float(decay_decisions))
+            support = self.scope_decisions[scope]
+            bounded_rate = floor + (requested_rate - floor) / math.sqrt(
+                1.0 + support / decay
+            )
         normalized_scores = {action: float(scores[action]) for action in legal}
         greedy = max(legal, key=lambda action: (normalized_scores[action], action))
         for action in legal:
@@ -79,6 +92,7 @@ class CoverageExplorer:
                 chosen = action
                 break
         self.selected[self._key(scope, chosen)] += 1
+        self.scope_decisions[scope] += 1
         self.decisions += 1
         if chosen != greedy:
             self.exploratory_decisions += 1
@@ -88,6 +102,7 @@ class CoverageExplorer:
             behavior_probability=max(1e-12, probabilities[chosen]),
             greedy_action=greedy,
             scores=normalized_scores,
+            exploration_rate=bounded_rate,
         )
 
     def export_state(self) -> dict[str, object]:
@@ -95,6 +110,7 @@ class CoverageExplorer:
             "seed": self.seed,
             "selected": dict(self.selected),
             "opportunities": dict(self.opportunities),
+            "scope_decisions": dict(self.scope_decisions),
             "decisions": self.decisions,
             "exploratory_decisions": self.exploratory_decisions,
         }
@@ -104,6 +120,7 @@ class CoverageExplorer:
             return
         selected = state.get("selected", {})
         opportunities = state.get("opportunities", {})
+        scope_decisions = state.get("scope_decisions", {})
         if isinstance(selected, dict):
             self.selected.update(
                 {str(key): max(0, int(value)) for key, value in selected.items()}
@@ -112,10 +129,16 @@ class CoverageExplorer:
             self.opportunities.update(
                 {str(key): max(0, int(value)) for key, value in opportunities.items()}
             )
+        if isinstance(scope_decisions, dict):
+            self.scope_decisions.update(
+                {str(key): max(0, int(value)) for key, value in scope_decisions.items()}
+            )
         self.decisions = max(0, int(state.get("decisions", self.decisions)))
         self.exploratory_decisions = max(
             0, int(state.get("exploratory_decisions", self.exploratory_decisions))
         )
+        # Do not replay the exact same pseudo-random stream after each encounter.
+        self.random.seed(self.seed ^ self.decisions)
 
     def metrics(self) -> dict[str, object]:
         covered = sum(value > 0 for value in self.selected.values())
@@ -131,4 +154,5 @@ class CoverageExplorer:
             "coverage": covered / available if available else 0.0,
             "selected": dict(self.selected),
             "opportunities": dict(self.opportunities),
+            "scope_decisions": dict(self.scope_decisions),
         }

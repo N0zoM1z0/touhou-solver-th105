@@ -22,8 +22,9 @@ new observation.
    bounded sufficient statistics per opponent/context/action: trials, hits,
    native damage in raw units and basis points, self-damage, spirit use,
    commitment, startup, punish frequency, an eight-bin downside histogram,
-   terminal eligibility credit, action timing, attack geometry, projectile
-   envelopes, defense outcomes, and observed cancel edges.
+   terminal and delayed-projectile eligibility credit, action timing, attack
+   geometry, projectile envelopes, defense outcomes, observed cancel edges,
+   persistent coarse-scope coverage counts, and high-level option outcomes.
 2. `runtime/th105_human_demonstrations.json` keeps facing-normalized,
    run-length-encoded human input patterns and their raw outcome components.
    These are cold-start evidence, not permanent rules.
@@ -34,7 +35,9 @@ new observation.
 5. `runtime/th105_transitions.jsonl` is the bounded staging corpus for
    event-aligned semi-Markov transitions. Each row keeps the quantized start
    state, exact native-gated legal action set, chosen
-   action and behavior probability, duration, raw outcome components, next
+   action and behavior probability, the nested `defend` / `reposition` /
+   `approach` / `attack` / `punish` legal option set and propensity, duration,
+   raw outcome components, next
    state, opponent/difficulty, and independent schema versions. Action schema
    v4 uses an exact singleton after a hard priority/commitment gate and a full
    set wherever several candidates survive; legacy unknown sets remain `null`.
@@ -65,6 +68,9 @@ cannot recover.
   recollection.
 - Context/action identifiers are opaque stable strings. Character-specific
   meaning belongs to learned native IDs and geometry, not schema conditionals.
+- Online selection backs sparse exact rows off through action family and motion
+  sufficient statistics. The full context remains in transition rows; online
+  exploration deliberately uses only bounded distance/altitude/phase buckets.
 
 ## Future offline training
 

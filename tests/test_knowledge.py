@@ -107,6 +107,8 @@ class OpponentKnowledgeTests(unittest.TestCase):
                         "trials": 3,
                     }
                 },
+                coverage_explorer={"decisions": 4},
+                option_outcomes={"*": {"option:attack": {"trials": 2}}},
             )
             self.assertEqual(profiles_for(path, "0xABCDEF00")["500"]["starts"], 2)
             self.assertEqual(
@@ -136,6 +138,13 @@ class OpponentKnowledgeTests(unittest.TestCase):
                     "trials"
                 ],
                 3,
+            )
+            models = character_models_from_data(
+                json.loads(path.read_text()), "0xABCDEF00"
+            )
+            self.assertEqual(models["coverage_explorer"]["decisions"], 4)
+            self.assertEqual(
+                models["option_outcomes"]["*"]["option:attack"]["trials"], 2
             )
 
     def test_profile_only_update_preserves_projectile_model(self) -> None:

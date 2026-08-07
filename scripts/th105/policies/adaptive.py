@@ -20,7 +20,7 @@ from ..motion import (
     generated_attack_probe_hypotheses,
     generated_motion_hypotheses,
 )
-from ..offense_learning import ActionOutcomeModel, combat_context
+from ..offense_learning import ActionOutcomeModel, OptionOutcomeModel, combat_context
 from ..offline_artifact import DistilledOutcomePolicy, live_distillation_context
 from ..opponent_model import ActionAssessment, OpponentActionModel
 from ..policy_api import POLICY_API_VERSION, PolicyDecision, PolicyObservation
@@ -30,7 +30,7 @@ from ..reward import RewardConfig, empirical_action_value, reward_for_playstyle
 
 PLAYSTYLE_TUNING: dict[str, dict[str, float]] = {
     "defensive": {
-        "exploration_scale": 420.0,
+        "exploration_scale": 260.0,
         "attack_cooldown_scale": 1.15,
         "far_watch": 40.0,
         "far_approach": 5.0,
@@ -40,7 +40,7 @@ PLAYSTYLE_TUNING: dict[str, dict[str, float]] = {
         "probe_self_ratio": 0.15,
     },
     "balanced": {
-        "exploration_scale": 450.0,
+        "exploration_scale": 300.0,
         "attack_cooldown_scale": 1.00,
         "far_watch": 25.0,
         "far_approach": 35.0,
@@ -50,7 +50,7 @@ PLAYSTYLE_TUNING: dict[str, dict[str, float]] = {
         "probe_self_ratio": 0.28,
     },
     "aggressive": {
-        "exploration_scale": 520.0,
+        "exploration_scale": 340.0,
         "attack_cooldown_scale": 0.62,
         "far_watch": 0.0,
         "far_approach": 90.0,
@@ -339,25 +339,39 @@ def _bounded_bandit_score(
 ) -> float:
     """Cheap optimistic score over bounded sufficient statistics.
 
-    Every untried candidate is sampled once. Afterwards the score combines
-    actual damage/trade/resource utility with a shrinking UCB exploration
-    bonus. Storage grows with contexts x candidates, not with match length.
+    Sparse exact candidates inherit family/motion evidence. A finite
+    pseudo-count and capped bonus replace the old untried=2000 rule, so known
+    good actions can beat novelty while explicit epsilon still covers the set.
     """
-    table = getattr(model, "table", {})
-    row = table.get(context, {}) if isinstance(table, dict) else {}
-    row = row if isinstance(row, dict) else {}
-    stats = row.get(label)
-    trials = int(getattr(stats, "trials", 0))
     bounded_prior = max(-200.0, min(250.0, prior_score * 0.15))
-    if trials <= 0:
-        return 2000.0 + bounded_prior
-    utility = empirical_action_value(
-        stats, reward_config or reward_for_playstyle("defensive")
-    )
-    total_trials = sum(int(getattr(value, "trials", 0)) for value in row.values())
+    config = reward_config or reward_for_playstyle("defensive")
+    estimate_fn = getattr(model, "estimate", None)
+    if callable(estimate_fn):
+        estimate = estimate_fn(label, context, config)
+        utility = float(estimate.utility)
+        trials = float(estimate.effective_trials)
+        total_trials = int(estimate.population_trials)
+    else:
+        table = getattr(model, "table", {})
+        row = table.get(context, {}) if isinstance(table, dict) else {}
+        row = row if isinstance(row, dict) else {}
+        stats = row.get(label)
+        trials = float(int(getattr(stats, "trials", 0)))
+        value_fn = getattr(model, "empirical_value", None)
+        utility = (
+            float(value_fn(stats, config))
+            if stats is not None and callable(value_fn)
+            else empirical_action_value(stats, config)
+            if stats is not None
+            else 0.0
+        )
+        total_trials = sum(int(getattr(value, "trials", 0)) for value in row.values())
+    # A finite pseudo-count lets hierarchy/epsilon discover new variants
+    # without the old permanent untried=2000 novelty treadmill.
     exploration = exploration_scale * math.sqrt(
-        math.log(max(2, total_trials + 2)) / trials
+        math.log(max(2, total_trials + 2)) / max(4.0, trials)
     )
+    exploration = min(420.0, exploration)
     return utility + exploration + bounded_prior
 
 
@@ -375,7 +389,7 @@ def _probe_is_empirically_unsafe(model: object, label: str, context: str) -> boo
 
 class AutonomousAdaptivePolicy:
     api_version = POLICY_API_VERSION
-    name = "autonomous-grammar-v4"
+    name = "hierarchical-options-v5"
 
     def __init__(self) -> None:
         self.playstyle = "balanced"
@@ -407,10 +421,15 @@ class AutonomousAdaptivePolicy:
         self.projectile_envelopes = ProjectileEnvelopeModel()
         self.defense_responses = DefenseResponseModel()
         self.offense_outcomes = ActionOutcomeModel()
+        self.option_outcomes = OptionOutcomeModel()
         self.enemy_attack_geometry = AttackGeometryModel()
         self.cancel_graph = CancelGraphModel()
         self.offline_policy = DistilledOutcomePolicy()
         self.coverage_explorer = CoverageExplorer()
+        self.active_combat_option: str | None = None
+        self.combat_option_until = 0
+        self.combat_option_legal_actions: tuple[str, ...] | None = None
+        self.combat_option_behavior_probability = 1.0
         self._decision_legal_actions: tuple[str, ...] | None = None
         self._decision_probability = 1.0
         self.cancel_cooldown = 0
@@ -426,6 +445,8 @@ class AutonomousAdaptivePolicy:
         self.human_knowledge_seeded = False
         self.attack_geometry_knowledge_seeded = False
         self.cancel_graph_knowledge_seeded = False
+        self.coverage_knowledge_seeded = False
+        self.option_knowledge_seeded = False
         self.offline_knowledge_seeded = False
         self.human_demonstrations: dict[str, object] = {}
         self.last_human_demonstration: dict[str, object] = {}
@@ -480,6 +501,7 @@ class AutonomousAdaptivePolicy:
             "projectile_envelopes": self.projectile_envelopes.export_state(),
             "defense_responses": self.defense_responses.export_state(),
             "offense_outcomes": self.offense_outcomes.export_state(),
+            "option_outcomes": self.option_outcomes.export_state(),
             "attack_geometry": self.enemy_attack_geometry.export_state(),
             "cancel_graph": self.cancel_graph.export_state(),
             "cancel_cooldown": self.cancel_cooldown,
@@ -503,6 +525,7 @@ class AutonomousAdaptivePolicy:
         self.projectile_envelopes.import_state(state.get("projectile_envelopes", {}))
         self.defense_responses.import_state(state.get("defense_responses", {}))
         self.offense_outcomes.import_state(state.get("offense_outcomes", {}))
+        self.option_outcomes.import_state(state.get("option_outcomes", {}))
         self.enemy_attack_geometry.import_state(state.get("attack_geometry", {}))
         self.cancel_graph.import_state(state.get("cancel_graph", {}))
         self.cancel_cooldown = int(state.get("cancel_cooldown", 0))
@@ -514,8 +537,10 @@ class AutonomousAdaptivePolicy:
         self.projectile_knowledge_seeded = True
         self.defense_knowledge_seeded = True
         self.offense_knowledge_seeded = True
+        self.option_knowledge_seeded = True
         self.attack_geometry_knowledge_seeded = True
         self.cancel_graph_knowledge_seeded = True
+        self.coverage_knowledge_seeded = True
 
     def _hazards(self, projectiles) -> tuple[HazardProjectile, ...]:
         return tuple(
@@ -593,6 +618,9 @@ class AutonomousAdaptivePolicy:
             intent,
             legal_actions=legal_actions,
             behavior_probability=probability,
+            combat_option=self.active_combat_option,
+            legal_combat_options=self.combat_option_legal_actions,
+            combat_option_probability=self.combat_option_behavior_probability,
         )
 
     def _choose_legal_action(
@@ -619,10 +647,28 @@ class AutonomousAdaptivePolicy:
                     self.counts[f"offline_candidate_hit:{family}"] += 1
                 else:
                     self.counts[f"offline_candidate_miss:{family}"] += 1
+        me, enemy = observation.state.p1, observation.state.p2
+        distance = abs(float(enemy.x) - float(me.x))
+        distance_bucket = "close" if distance < 100 else "mid" if distance < 280 else "far"
+        altitude = "air" if float(me.y) >= 8.0 else "ground"
+        phase = self.last_assessment.phase
+        phase_bucket = (
+            "danger"
+            if phase in {"startup", "active", "unknown", "spell-danger"}
+            else "advantage"
+            if phase in {"reaction", "recovery"}
+            else "neutral"
+        )
+        # The rich distillation context remains in the raw transition. Online
+        # coverage uses a bounded scope so visits survive and actually converge.
+        coverage_scope = f"{family}:{distance_bucket}:{altitude}:{phase_bucket}"
+        minimum_rate = 0.005 if family == "defense" else 0.01 if family == "combat-option" else 0.02
         selection = self.coverage_explorer.choose(
-            f"{family}:{offline_context}",
+            coverage_scope,
             combined,
             exploration_rate=float(getattr(observation, "exploration_rate", 0.08)),
+            minimum_rate=minimum_rate,
+            decay_decisions=60.0 if family == "combat-option" else 90.0,
         )
         self._decision_legal_actions = selection.legal_actions
         self._decision_probability = selection.behavior_probability
@@ -630,7 +676,80 @@ class AutonomousAdaptivePolicy:
             self.counts[f"coverage_exploration:{family}"] += 1
         self.counts[f"legal_decisions:{family}"] += 1
         self.counts[f"legal_candidates:{family}"] += len(selection.legal_actions)
+        self.counts[f"effective_epsilon_milli:{family}"] = round(
+            selection.exploration_rate * 1000.0
+        )
         return selection.action
+
+    def _choose_combat_option(
+        self,
+        observation: PolicyObservation,
+        *,
+        distance: float,
+        spirit: int,
+        confirmed_punish: bool,
+    ) -> str:
+        """Learn safe high-level intent; native danger gates run before this."""
+        me, enemy = observation.state.p1, observation.state.p2
+        context = combat_context(
+            distance=distance,
+            enemy_y=enemy.y,
+            enemy_x=enemy.x,
+            phase=self.last_assessment.phase,
+        )
+        legal = ["defend", "reposition"]
+        if distance > 72.0:
+            legal.append("approach")
+        if self.attack_cooldown == 0 and me.action_id < 50:
+            legal.append("attack")
+        if confirmed_punish and distance < 260.0 and me.action_id < 50:
+            legal.append("punish")
+        # A current option is an n-step macro decision, not a new bandit trial
+        # on every 60-Hz frame. Safety gates can still interrupt it immediately.
+        if (
+            self.active_combat_option in legal
+            and observation.frame < self.combat_option_until
+            and self.option_outcomes.episode is not None
+        ):
+            return str(self.active_combat_option)
+        priors = {
+            "defend": 5.0,
+            "reposition": 15.0,
+            "approach": self.tuning["neutral_approach"],
+            "attack": 80.0 if distance < 280.0 else 45.0,
+            "punish": 180.0,
+        }
+        scores = {
+            option: self._bandit_score(
+                self.option_outcomes,
+                f"option:{option}",
+                context,
+                prior_score=priors[option],
+            )
+            for option in legal
+        }
+        selected = self._choose_legal_action(
+            observation, "combat-option", scores
+        )
+        option = selected.split(":", 1)[-1] if selected.startswith("option:") else selected
+        self.active_combat_option = option
+        self.combat_option_until = observation.frame + 45
+        self.combat_option_legal_actions = self._decision_legal_actions
+        self.combat_option_behavior_probability = self._decision_probability
+        self.option_outcomes.begin(
+            f"option:{option}",
+            context,
+            frame=observation.frame,
+            commitment=90,
+            enemy_hp=enemy.hp,
+            me_hp=me.hp,
+            spirit=spirit,
+            me_x=me.x,
+            me_action_id=me.action_id,
+            projectile_count=len(tuple(getattr(observation, "own_projectiles", ()))),
+        )
+        self.counts[f"combat_option:{option}"] += 1
+        return option
 
     def _evaluate_hazard(self, *args, **kwargs):
         started = time.perf_counter_ns()
@@ -1183,6 +1302,16 @@ class AutonomousAdaptivePolicy:
                 getattr(observation, "prior_offense_model", {}) or {}
             )
             self.offense_knowledge_seeded = True
+        if not self.option_knowledge_seeded:
+            self.option_outcomes.import_state(
+                getattr(observation, "prior_option_model", {}) or {}
+            )
+            self.option_knowledge_seeded = True
+        if not self.coverage_knowledge_seeded:
+            self.coverage_explorer.import_state(
+                getattr(observation, "prior_coverage_explorer", {}) or {}
+            )
+            self.coverage_knowledge_seeded = True
         if not self.human_knowledge_seeded:
             prior_human = getattr(observation, "prior_human_demonstrations", {})
             self.human_demonstrations = (
@@ -1219,6 +1348,8 @@ class AutonomousAdaptivePolicy:
             self.guard_chain_until = 0
             self.combo_confirm_deadline = 0
             self.hit_confirm_until = 0
+            self.active_combat_option = None
+            self.combat_option_until = 0
             self.enemy_attack_geometry.reset_episode()
             self.cancel_graph.reset_episode()
             self.counts["round_model_resets"] += 1
@@ -1244,6 +1375,15 @@ class AutonomousAdaptivePolicy:
             active_hitbox=bool(getattr(me, "attack_boxes", ())),
         )
         self.offense_outcomes.observe(
+            frame=observation.frame,
+            enemy_hp=enemy.hp,
+            me_hp=me.hp,
+            spirit=spirit,
+            me_x=me.x,
+            me_action_id=me.action_id,
+            projectile_count=len(own_projectiles),
+        )
+        self.option_outcomes.observe(
             frame=observation.frame,
             enemy_hp=enemy.hp,
             me_hp=me.hp,
@@ -1911,119 +2051,52 @@ class AutonomousAdaptivePolicy:
                 self.queue_intent = None
                 self.queue_legal_actions = None
                 self.queue_behavior_probability = 1.0
-        elif confirmed_punish and distance < 260 and me.action_id < 50:
-            selected = self._start_human_demonstration(observation, toward)
-            if selected is None and distance < 150:
-                selected = self._start_attack_probe(
-                    observation, toward, phase="reaction"
-                )
-            if selected is None:
-                keys, intent = (
-                    ({toward}, "close-for-punish")
-                    if distance >= 80
-                    else (
-                        {back},
-                        "punish-unavailable",
-                    )
-                )
-            else:
-                keys, intent = selected
-        elif (
-            self.attack_cooldown == 0
-            and me.action_id < 50
-            and me.y < 8.0
-            and 60.0 <= distance < 260.0
-            and self.last_assessment.phase == "neutral"
-            and not hazards
-        ):
-            selected = self._start_attack_probe(observation, toward)
-            if selected is None:
-                keys = {toward} if distance >= 150.0 else {back}
-                intent = "human-probe-unavailable"
-                self.attack_cooldown = self._attack_cooldown(24)
-            else:
-                keys, intent = selected
-        elif (
-            self.motion_probe_cooldown == 0
-            and self.attack_cooldown == 0
-            and me.action_id < 50
-            and me.y < 8.0
-            and distance >= 200.0
-            and spirit >= 350
-            and self.last_assessment.phase in {"neutral", "recovery"}
-            and not hazards
-        ):
-            selected = self._start_motion_hypothesis(observation, toward)
-            if selected is None:
-                keys, intent = ({toward}, "motion-catalog-exhausted")
-                self.motion_probe_cooldown = 120
-            else:
-                keys, intent = selected
-        elif distance > self.tuning["far_zone"]:
-            if spirit < 400:
-                keys = {back}
-                intent = "spirit-recover"
-            else:
-                intent = self._choose_legal_action(
-                    observation,
-                    "far-movement",
-                    {
-                        "far-neutral-watch": self.tuning["far_watch"],
-                        "far-approach": self.tuning["far_approach"],
-                    },
-                )
-                keys = {toward} if intent == "far-approach" else set()
-        elif distance > 92:
-            if spirit < 300:
-                keys = {back}
-                intent = "spirit-recover"
-            elif self.last_assessment.phase in {"reaction", "recovery"}:
-                intent = self._choose_legal_action(
-                    observation,
-                    "advantage-movement",
-                    {"close-during-advantage": 80.0, "neutral-watch": 0.0},
-                )
-                keys = {toward} if intent == "close-during-advantage" else set()
-            else:
-                intent = self._choose_legal_action(
-                    observation,
-                    "neutral-movement",
-                    {
-                        "neutral-spacing": 35.0 if distance < 185.0 else -10.0,
-                        "neutral-watch": 30.0 if distance >= 185.0 else 0.0,
-                        "neutral-approach": self.tuning["neutral_approach"],
-                    },
-                )
-                keys = (
-                    {back}
-                    if intent == "neutral-spacing"
-                    else {toward}
-                    if intent == "neutral-approach"
-                    else set()
-                )
-        elif (
-            self.attack_cooldown == 0
-            and me.action_id < 50
-            and self.last_assessment.phase in {"reaction", "recovery"}
-        ):
-            selected = self._start_attack_probe(
-                observation, toward, phase=self.last_assessment.phase
-            )
-            if selected is None:
-                keys, intent = {toward}, "close-for-learned-pressure"
-            else:
-                keys, intent = selected
         else:
+            option = self._choose_combat_option(
+                observation,
+                distance=distance,
+                spirit=spirit,
+                confirmed_punish=confirmed_punish,
+            )
             selected = None
-            if self.attack_cooldown == 0 and me.action_id < 50 and not hazards:
-                selected = self._start_attack_probe(
-                    observation, toward, phase=self.last_assessment.phase
-                )
-            if selected is not None:
-                keys, intent = selected
-            else:
+            if option == "punish":
+                selected = self._start_human_demonstration(observation, toward)
+                if selected is None and distance < 150.0:
+                    selected = self._start_attack_probe(
+                        observation, toward, phase="reaction"
+                    )
+                if selected is None:
+                    keys = {toward} if distance >= 80.0 else {back}
+                    intent = "option-punish-setup"
+                else:
+                    keys, intent = selected
+            elif option == "attack":
+                if (
+                    distance >= 200.0
+                    and spirit >= 350
+                    and me.y < 8.0
+                    and self.motion_probe_cooldown == 0
+                ):
+                    selected = self._start_motion_hypothesis(observation, toward)
+                elif distance < 280.0:
+                    selected = self._start_attack_probe(
+                        observation, toward, phase=self.last_assessment.phase
+                    )
+                if selected is None:
+                    keys = {toward} if distance >= 120.0 else {back}
+                    intent = "option-attack-setup"
+                    self.attack_cooldown = self._attack_cooldown(18)
+                else:
+                    keys, intent = selected
+            elif option == "approach":
+                keys = {toward}
+                intent = "option-approach"
+            elif option == "reposition":
                 keys = {back}
-                intent = "close-probe-unavailable"
+                intent = "option-reposition"
+            else:
+                keys = {back} if distance < 280.0 else set()
+                intent = "option-defend"
 
         self.attack_cooldown = max(0, self.attack_cooldown - 1)
         self.evade_cooldown = max(0, self.evade_cooldown - 1)
@@ -2053,6 +2126,17 @@ class AutonomousAdaptivePolicy:
             max_enemy_hp=int(outcome.get("max_enemy_hp", 10000)),
             max_me_hp=int(outcome.get("max_me_hp", 10000)),
         )
+        self.option_outcomes.observe_terminal(
+            frame=int(outcome.get("frame", 0)),
+            won=won,
+            enemy_hp=int(outcome.get("enemy_hp", 0)),
+            me_hp=int(outcome.get("me_hp", 0)),
+            spirit=int(outcome.get("spirit", 0)),
+            max_enemy_hp=int(outcome.get("max_enemy_hp", 10000)),
+            max_me_hp=int(outcome.get("max_me_hp", 10000)),
+        )
+        self.active_combat_option = None
+        self.combat_option_until = 0
         self.defense_responses.finish()
         self.counts[
             f"round_terminal:{'win' if won is True else 'loss' if won is False else 'draw'}"
@@ -2085,6 +2169,8 @@ class AutonomousAdaptivePolicy:
             "defense_response_state": self.defense_responses.export_state(),
             "offense_outcomes": self.offense_outcomes.metrics(),
             "offense_outcome_state": self.offense_outcomes.export_state(),
+            "option_outcomes": self.option_outcomes.metrics(),
+            "option_outcome_state": self.option_outcomes.export_state(),
             "attack_geometry": self.enemy_attack_geometry.metrics(),
             "attack_geometry_state": self.enemy_attack_geometry.export_state(),
             "cancel_graph": self.cancel_graph.metrics(),
@@ -2126,6 +2212,7 @@ class AutonomousAdaptivePolicy:
             "own_action_model": self.own_action_model.metrics(),
             "offline_policy": self.offline_policy.metrics(),
             "coverage_explorer": self.coverage_explorer.metrics(),
+            "coverage_explorer_state": self.coverage_explorer.export_state(),
             "performance": {
                 "hazard_calls": self.hazard_calls,
                 "hazard_average_us": (

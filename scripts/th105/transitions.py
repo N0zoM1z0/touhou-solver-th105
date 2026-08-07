@@ -119,6 +119,9 @@ class _ActiveOption:
     action: str
     legal_actions: tuple[str, ...] | None
     behavior_probability: float
+    combat_option: str | None
+    legal_combat_options: tuple[str, ...] | None
+    combat_option_probability: float
     start_state: dict[str, object]
     start_enemy_hp: int
     start_me_hp: int
@@ -187,13 +190,22 @@ class OptionTransitionRecorder:
         return "+".join(sorted(str(key) for key in keys))
 
     @staticmethod
-    def _legal_actions(decision: Any) -> tuple[str, ...] | None:
-        raw = getattr(decision, "legal_actions", None)
+    def _canonical_actions(raw: object) -> tuple[str, ...] | None:
         if not isinstance(raw, (tuple, list)):
             return None
         # Canonical ordering makes this both compact under gzip and stable as
         # an option-boundary key.
         return tuple(sorted({str(action) for action in raw}))
+
+    @classmethod
+    def _legal_actions(cls, decision: Any) -> tuple[str, ...] | None:
+        return cls._canonical_actions(getattr(decision, "legal_actions", None))
+
+    @classmethod
+    def _legal_combat_options(cls, decision: Any) -> tuple[str, ...] | None:
+        return cls._canonical_actions(
+            getattr(decision, "legal_combat_options", None)
+        )
 
     def _append_keys(self, keys: object) -> None:
         if self.active is None:
@@ -225,6 +237,11 @@ class OptionTransitionRecorder:
         probability = float(getattr(decision, "behavior_probability", 1.0))
         if not 0.0 < probability <= 1.0:
             probability = 1.0
+        option_probability = float(
+            getattr(decision, "combat_option_probability", 1.0)
+        )
+        if not 0.0 < option_probability <= 1.0:
+            option_probability = 1.0
         self.active = _ActiveOption(
             episode_id=self.episode_id,
             step=self.step,
@@ -232,6 +249,13 @@ class OptionTransitionRecorder:
             action=str(decision.intent),
             legal_actions=legal_actions,
             behavior_probability=probability,
+            combat_option=(
+                str(value)
+                if (value := getattr(decision, "combat_option", None)) is not None
+                else None
+            ),
+            legal_combat_options=self._legal_combat_options(decision),
+            combat_option_probability=option_probability,
             start_state=transition_state(state, enemy_projectiles, own_projectiles),
             start_enemy_hp=int(enemy.hp),
             start_me_hp=int(me.hp),
@@ -260,6 +284,10 @@ class OptionTransitionRecorder:
             and (
                 self.active.action != str(decision.intent)
                 or self.active.legal_actions != self._legal_actions(decision)
+                or self.active.combat_option
+                != getattr(decision, "combat_option", None)
+                or self.active.legal_combat_options
+                != self._legal_combat_options(decision)
                 or self.active.policy_generation != policy_generation
             )
         )
@@ -332,6 +360,14 @@ class OptionTransitionRecorder:
                 "legal_actions_known": option.legal_actions is not None,
                 "action": option.action,
                 "behavior_probability": option.behavior_probability,
+                "combat_option": option.combat_option,
+                "legal_combat_options": (
+                    list(option.legal_combat_options)
+                    if option.legal_combat_options is not None
+                    else None
+                ),
+                "combat_options_known": option.legal_combat_options is not None,
+                "combat_option_probability": option.combat_option_probability,
                 "key_trace_rle": option.key_trace_rle,
                 "duration_frames": max(1, frame - option.start_frame),
                 "outcome": {

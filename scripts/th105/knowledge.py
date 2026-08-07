@@ -14,6 +14,8 @@ MODEL_FIELDS = (
     "offense_outcomes",
     "attack_geometry",
     "cancel_graph",
+    "coverage_explorer",
+    "option_outcomes",
 )
 
 
@@ -112,6 +114,8 @@ def persist_character_models(
     offense_outcomes: dict[str, object] | None = None,
     attack_geometry: dict[str, object] | None = None,
     cancel_graph: dict[str, object] | None = None,
+    coverage_explorer: dict[str, object] | None = None,
+    option_outcomes: dict[str, object] | None = None,
 ) -> None:
     data = load_knowledge(path)
     data["schema_version"] = CORPUS_SCHEMA_VERSION
@@ -131,6 +135,10 @@ def persist_character_models(
         entry["attack_geometry"] = attack_geometry
     if cancel_graph is not None:
         entry["cancel_graph"] = cancel_graph
+    if coverage_explorer is not None:
+        entry["coverage_explorer"] = coverage_explorer
+    if option_outcomes is not None:
+        entry["option_outcomes"] = option_outcomes
     characters[character_key] = entry
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")

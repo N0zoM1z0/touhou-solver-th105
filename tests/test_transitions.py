@@ -100,6 +100,9 @@ class OptionTransitionRecorderTests(unittest.TestCase):
             "attack",
             legal_actions=("attack", "guard"),
             behavior_probability=1.0,
+            combat_option="attack",
+            legal_combat_options=("attack", "approach", "defend"),
+            combat_option_probability=0.8,
         )
         initial = battle()
         terminal = battle(enemy=fighter(x=500.0, vtable=0x5678, hp=0))
@@ -111,6 +114,12 @@ class OptionTransitionRecorderTests(unittest.TestCase):
 
         self.assertEqual(writer.rows[0]["outcome"]["terminal"], "win")
         self.assertEqual(writer.rows[0]["legal_actions"], ["attack", "guard"])
+        self.assertEqual(writer.rows[0]["combat_option"], "attack")
+        self.assertEqual(
+            writer.rows[0]["legal_combat_options"],
+            ["approach", "attack", "defend"],
+        )
+        self.assertEqual(writer.rows[0]["combat_option_probability"], 0.8)
         self.assertNotEqual(writer.rows[1]["episode_id"], first_episode)
         self.assertTrue(writer.rows[1]["outcome"]["truncated"])
 

@@ -557,6 +557,8 @@ def run_adaptive_fight(
         prior_offense_model = cold_start_offense_prior(base_models["offense_outcomes"])
     prior_attack_geometry = contextual_prior("attack_geometry")
     prior_cancel_graph = contextual_prior("cancel_graph")
+    prior_coverage_explorer = contextual_prior("coverage_explorer")
+    prior_option_model = contextual_prior("option_outcomes")
     prior_human_demonstrations: dict[str, object] = {}
     if telemetry_path is not None:
         human_source = telemetry_path.with_name("th105_human_demonstrations.json")
@@ -624,6 +626,10 @@ def run_adaptive_fight(
     def compact_plugin_status(status: dict[str, object]) -> dict[str, object]:
         metrics = status.get("metrics", {})
         metrics = metrics if isinstance(metrics, dict) else {}
+        coverage = metrics.get("coverage_explorer", {})
+        coverage = coverage if isinstance(coverage, dict) else {}
+        options = metrics.get("option_outcomes", {})
+        options = options if isinstance(options, dict) else {}
         return {
             "name": status.get("name"),
             "generation": status.get("generation"),
@@ -639,6 +645,21 @@ def run_adaptive_fight(
                 "human_demonstrations": metrics.get("human_demonstrations"),
                 "attack_geometry": metrics.get("attack_geometry"),
                 "cancel_graph": metrics.get("cancel_graph"),
+                "option_outcomes": {
+                    "rounds": options.get("rounds"),
+                    "active": options.get("active"),
+                },
+                "coverage_explorer": {
+                    key: coverage.get(key)
+                    for key in (
+                        "decisions",
+                        "exploratory_decisions",
+                        "exploratory_rate",
+                        "covered_scope_actions",
+                        "available_scope_actions",
+                        "coverage",
+                    )
+                },
                 "offline_policy": metrics.get("offline_policy"),
                 "performance": metrics.get("performance"),
             },
@@ -669,6 +690,8 @@ def run_adaptive_fight(
         learned_offense = metrics.get("offense_outcome_state", {})
         learned_attack_geometry = metrics.get("attack_geometry_state", {})
         learned_cancel_graph = metrics.get("cancel_graph_state", {})
+        learned_coverage = metrics.get("coverage_explorer_state", {})
+        learned_options = metrics.get("option_outcome_state", {})
         persist_character_models(
             knowledge_path,
             opponent_key,
@@ -689,6 +712,12 @@ def run_adaptive_fight(
             ),
             cancel_graph=(
                 learned_cancel_graph if isinstance(learned_cancel_graph, dict) else {}
+            ),
+            coverage_explorer=(
+                learned_coverage if isinstance(learned_coverage, dict) else {}
+            ),
+            option_outcomes=(
+                learned_options if isinstance(learned_options, dict) else {}
             ),
         )
         if compile_models:
@@ -888,6 +917,8 @@ def run_adaptive_fight(
                     prior_human_demonstrations=prior_human_demonstrations,
                     prior_attack_geometry=prior_attack_geometry,
                     prior_cancel_graph=prior_cancel_graph,
+                    prior_coverage_explorer=prior_coverage_explorer,
+                    prior_option_model=prior_option_model,
                     prior_offline_policy=prior_offline_policy,
                     difficulty=difficulty,
                     opponent_key=opponent_key,

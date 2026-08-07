@@ -73,6 +73,9 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertIn(decision.intent, decision.legal_actions or ())
         self.assertGreaterEqual(len(decision.legal_actions or ()), 2)
         self.assertEqual(decision.behavior_probability, 1.0)
+        self.assertIsNotNone(decision.combat_option)
+        self.assertIn(decision.combat_option, decision.legal_combat_options or ())
+        self.assertGreaterEqual(len(decision.legal_combat_options or ()), 3)
 
     def test_frame_attack_box_replaces_learned_square_extent(self) -> None:
         projectile = SimpleNamespace(
@@ -231,7 +234,7 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         self.assertTrue(all(action.startswith("grammar-probe:") for action in legal))
         self.assertNotIn("close-pressure-z", legal)
 
-    def test_bandit_samples_untried_probe_before_known_probe(self) -> None:
+    def test_bandit_prefers_proven_success_over_untried_novelty(self) -> None:
         model = ActionOutcomeModel()
         model.begin(
             "known",
@@ -244,8 +247,8 @@ class AdaptiveNativeGeometryTests(unittest.TestCase):
         )
         model.observe(frame=1, enemy_hp=9000, me_hp=10000, spirit=1000)
         self.assertGreater(
-            _bounded_bandit_score(model, "untried", "ctx"),
             _bounded_bandit_score(model, "known", "ctx"),
+            _bounded_bandit_score(model, "untried", "ctx"),
         )
 
     def test_learned_melee_box_keeps_future_active_delay(self) -> None:

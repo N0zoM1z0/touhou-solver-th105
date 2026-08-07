@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.offense_learning import ActionOutcomeModel, combat_context
+from th105.offense_learning import ActionOutcomeModel, OptionOutcomeModel, combat_context
 
 
 class ActionOutcomeTests(unittest.TestCase):
@@ -87,6 +87,42 @@ class ActionOutcomeTests(unittest.TestCase):
         second.import_state(first.export_state())
         self.assertEqual(second.table["ctx"]["AAAA"].total_damage, 500)
         self.assertEqual(second.table["ctx"]["AAAA"].normalized_samples, 1)
+        self.assertIn("@family:AAAA", second.hierarchy["ctx"])
+
+    def test_motion_hierarchy_shares_sparse_evidence(self) -> None:
+        model = ActionOutcomeModel()
+        model.begin(
+            "motion:character:236B", "ctx", frame=0, commitment=5,
+            enemy_hp=10000, me_hp=10000, spirit=1000,
+        )
+        model.observe(frame=5, enemy_hp=9400, me_hp=10000, spirit=900)
+        estimate = model.estimate("motion:other:236B", "ctx")
+        self.assertGreater(estimate.effective_trials, 0)
+        self.assertGreater(estimate.utility, 0)
+
+    def test_projectile_receives_delayed_eligibility_credit(self) -> None:
+        model = ActionOutcomeModel()
+        model.begin(
+            "motion:character:236B", "ctx", frame=0, commitment=5,
+            enemy_hp=10000, me_hp=10000, spirit=1000, projectile_count=0,
+        )
+        model.observe(
+            frame=5, enemy_hp=10000, me_hp=10000, spirit=900,
+            projectile_count=1,
+        )
+        model.observe(frame=45, enemy_hp=9500, me_hp=10000, spirit=900)
+        stats = model.table["ctx"]["motion:character:236B"]
+        self.assertGreater(stats.delayed_damage_credit_bp, 0.0)
+        self.assertGreater(stats.eligibility_events, 0)
+
+    def test_option_value_does_not_apply_attack_whiff_penalty(self) -> None:
+        model = OptionOutcomeModel()
+        model.begin(
+            "option:defend", "ctx", frame=0, commitment=30,
+            enemy_hp=10000, me_hp=10000, spirit=1000,
+        )
+        model.observe(frame=30, enemy_hp=10000, me_hp=10000, spirit=1000)
+        self.assertEqual(model.estimate("option:defend", "ctx").utility, 0.0)
 
     def test_terminal_credit_is_decayed_and_round_summary_is_persisted(self) -> None:
         model = ActionOutcomeModel()

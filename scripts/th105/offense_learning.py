@@ -46,6 +46,9 @@ class ActionOutcomeStats:
     action_change_trials: int = 0
     projectile_spawn_trials: int = 0
     total_displacement: int = 0
+    delayed_damage_credit_bp: float = 0.0
+    delayed_self_damage_credit_bp: float = 0.0
+    eligibility_events: int = 0
 
     @property
     def hit_rate(self) -> float:
@@ -125,6 +128,37 @@ class RecentOutcome:
     label: str
     context: str
     end_frame: int
+    max_enemy_hp: int = 10000
+    max_me_hp: int = 10000
+    projectile_spawned: bool = False
+    effectful: bool = False
+
+
+@dataclass(frozen=True)
+class ActionEstimate:
+    utility: float
+    effective_trials: float
+    population_trials: int
+
+
+def action_hierarchy(label: str) -> tuple[str, ...]:
+    """Return bounded, character-agnostic backoff keys for one action label."""
+    family, separator, detail = str(label).partition(":")
+    if not separator:
+        return (f"@family:{family}",)
+    keys = [f"@family:{family}"]
+    if family == "motion":
+        motion = detail.rsplit(":", 1)[-1]
+        keys.append(f"@motion:{motion}")
+    elif family == "cancel-discovery":
+        keys.append(f"@motion:{detail.rsplit(':', 1)[-1]}")
+    elif family == "cancel":
+        edge_parts = detail.split("|")
+        if len(edge_parts) >= 2:
+            keys.append(f"@cancel-input:{edge_parts[1]}")
+    elif family in {"grammar-probe", "human-probe"}:
+        keys.append(f"@attack-pattern:{detail.rsplit(':', 1)[-1]}")
+    return tuple(dict.fromkeys(keys))
 
 
 @dataclass
@@ -142,9 +176,88 @@ class ActionOutcomeModel:
 
     def __init__(self) -> None:
         self.table: dict[str, dict[str, ActionOutcomeStats]] = {}
+        self.hierarchy: dict[str, dict[str, ActionOutcomeStats]] = {}
         self.episode: OffenseEpisode | None = None
-        self.recent: deque[RecentOutcome] = deque(maxlen=32)
+        self.recent: deque[RecentOutcome] = deque(maxlen=128)
         self.rounds = RoundOutcomeStats()
+        self.last_observed_enemy_hp: int | None = None
+        self.last_observed_me_hp: int | None = None
+
+    @staticmethod
+    def _apply_sample(
+        stats: ActionOutcomeStats,
+        *,
+        damage: int,
+        self_damage: int,
+        spirit_cost: int,
+        commitment: int,
+        damage_bp: int,
+        self_damage_bp: int,
+        spirit_cost_bp: int,
+        displacement: float,
+        action_changed: bool,
+        projectile_spawned: bool,
+        effectful: bool,
+        startup_to_hit: int | None,
+    ) -> None:
+        stats.trials += 1
+        stats.total_damage += damage
+        stats.total_self_damage += self_damage
+        stats.total_spirit_cost += spirit_cost
+        stats.total_commitment += commitment
+        stats.normalized_samples += 1
+        stats.total_damage_bp += damage_bp
+        stats.total_self_damage_bp += self_damage_bp
+        stats.total_spirit_cost_bp += spirit_cost_bp
+        stats.self_damage_histogram[damage_bin_index(self_damage_bp)] += 1
+        stats.connections += int(damage > 0)
+        stats.punished_trials += int(self_damage > 0)
+        stats.total_displacement += round(displacement)
+        stats.action_change_trials += int(action_changed)
+        stats.projectile_spawn_trials += int(projectile_spawned)
+        stats.effectful_trials += int(effectful)
+        if startup_to_hit is not None:
+            stats.startup_samples += 1
+            stats.total_startup_to_hit += startup_to_hit
+
+    def _credit_recent_damage(self, *, frame: int, enemy_hp: int, me_hp: int) -> None:
+        """Eligibility-trace credit for delayed projectiles and option aftermath."""
+        enemy_drop = max(0, (self.last_observed_enemy_hp or enemy_hp) - enemy_hp)
+        me_drop = max(0, (self.last_observed_me_hp or me_hp) - me_hp)
+        self.last_observed_enemy_hp = enemy_hp
+        self.last_observed_me_hp = me_hp
+        if not enemy_drop and not me_drop:
+            return
+        eligible: list[tuple[RecentOutcome, float]] = []
+        for recent in self.recent:
+            age = max(0, frame - recent.end_frame)
+            horizon = 360 if recent.projectile_spawned else 150
+            if age > horizon:
+                continue
+            source_weight = 2.5 if recent.projectile_spawned else 1.0 if recent.effectful else 0.35
+            weight = source_weight * (0.90 ** (age / 30.0))
+            if weight > 0.01:
+                eligible.append((recent, weight))
+        total_weight = sum(weight for _recent, weight in eligible)
+        if total_weight <= 0.0:
+            return
+        for recent, weight in eligible:
+            share = weight / total_weight
+            damage_credit = basis_points(enemy_drop, recent.max_enemy_hp) * share
+            self_credit = basis_points(me_drop, recent.max_me_hp) * share
+            for context in dict.fromkeys((recent.context, "*")):
+                for table, labels in (
+                    (self.table, (recent.label,)),
+                    (self.hierarchy, action_hierarchy(recent.label)),
+                ):
+                    row = table.get(context, {})
+                    for label in labels:
+                        stats = row.get(label)
+                        if stats is None:
+                            continue
+                        stats.delayed_damage_credit_bp += damage_credit
+                        stats.delayed_self_damage_credit_bp += self_credit
+                        stats.eligibility_events += 1
 
     def begin(
         self,
@@ -198,6 +311,7 @@ class ActionOutcomeModel:
         me_action_id: int | None = None,
         projectile_count: int | None = None,
     ) -> None:
+        self._credit_recent_damage(frame=frame, enemy_hp=enemy_hp, me_hp=me_hp)
         episode = self.episode
         if episode is None:
             return
@@ -246,41 +360,51 @@ class ActionOutcomeModel:
         effectful = bool(
             damage or displacement >= 80.0 or action_changed or projectile_spawned
         )
-        # A generic caller may already use the global context. Do not apply the
-        # same outcome twice when contextual and global keys are identical.
+        damage_bp = basis_points(damage, episode.max_enemy_hp)
+        self_damage_bp = basis_points(self_damage, episode.max_me_hp)
+        spirit_cost_bp = basis_points(spirit_cost, episode.max_spirit)
+        startup_to_hit = (
+            episode.first_hit_frame - episode.start_frame
+            if episode.first_hit_frame is not None
+            else None
+        )
+        # Exact rows preserve the full online context. Hierarchy rows share
+        # evidence across action families/motions without changing raw corpus.
         for context in dict.fromkeys((episode.context, "*")):
             stats = self.table.setdefault(context, {}).setdefault(
                 episode.label, ActionOutcomeStats()
             )
-            stats.trials += 1
-            stats.total_damage += damage
-            stats.total_self_damage += self_damage
-            stats.total_spirit_cost += spirit_cost
-            stats.total_commitment += commitment
-            damage_bp = basis_points(damage, episode.max_enemy_hp)
-            self_damage_bp = basis_points(self_damage, episode.max_me_hp)
-            stats.normalized_samples += 1
-            stats.total_damage_bp += damage_bp
-            stats.total_self_damage_bp += self_damage_bp
-            stats.total_spirit_cost_bp += basis_points(spirit_cost, episode.max_spirit)
-            stats.self_damage_histogram[damage_bin_index(self_damage_bp)] += 1
-            if damage:
-                stats.connections += 1
-            if self_damage:
-                stats.punished_trials += 1
-            stats.total_displacement += round(displacement)
-            if action_changed:
-                stats.action_change_trials += 1
-            if projectile_spawned:
-                stats.projectile_spawn_trials += 1
-            if effectful:
-                stats.effectful_trials += 1
-            if episode.first_hit_frame is not None:
-                stats.startup_samples += 1
-                stats.total_startup_to_hit += (
-                    episode.first_hit_frame - episode.start_frame
+            sample = dict(
+                damage=damage,
+                self_damage=self_damage,
+                spirit_cost=spirit_cost,
+                commitment=commitment,
+                damage_bp=damage_bp,
+                self_damage_bp=self_damage_bp,
+                spirit_cost_bp=spirit_cost_bp,
+                displacement=displacement,
+                action_changed=action_changed,
+                projectile_spawned=projectile_spawned,
+                effectful=effectful,
+                startup_to_hit=startup_to_hit,
+            )
+            self._apply_sample(stats, **sample)
+            hierarchy_row = self.hierarchy.setdefault(context, {})
+            for key in action_hierarchy(episode.label):
+                self._apply_sample(
+                    hierarchy_row.setdefault(key, ActionOutcomeStats()), **sample
                 )
-        self.recent.append(RecentOutcome(episode.label, episode.context, frame))
+        self.recent.append(
+            RecentOutcome(
+                episode.label,
+                episode.context,
+                frame,
+                max_enemy_hp=episode.max_enemy_hp,
+                max_me_hp=episode.max_me_hp,
+                projectile_spawned=projectile_spawned,
+                effectful=effectful,
+            )
+        )
 
     def observe_terminal(
         self,
@@ -308,6 +432,8 @@ class ActionOutcomeModel:
         self.rounds.total_enemy_remaining_hp_bp += basis_points(enemy_hp, max_enemy_hp)
         if won is None:
             self.recent.clear()
+            self.last_observed_enemy_hp = None
+            self.last_observed_me_hp = None
             return
         for recent in self.recent:
             age = max(0, frame - recent.end_frame)
@@ -315,20 +441,76 @@ class ActionOutcomeModel:
                 continue
             credit = 0.85 ** (age / 120.0)
             for context in dict.fromkeys((recent.context, "*")):
-                stats = self.table.get(context, {}).get(recent.label)
-                if stats is None:
-                    continue
-                if won:
-                    stats.terminal_win_credit += credit
-                else:
-                    stats.terminal_loss_credit += credit
+                for table, labels in (
+                    (self.table, (recent.label,)),
+                    (self.hierarchy, action_hierarchy(recent.label)),
+                ):
+                    row = table.get(context, {})
+                    for label in labels:
+                        stats = row.get(label)
+                        if stats is None:
+                            continue
+                        if won:
+                            stats.terminal_win_credit += credit
+                        else:
+                            stats.terminal_loss_credit += credit
         self.recent.clear()
+        self.last_observed_enemy_hp = None
+        self.last_observed_me_hp = None
 
     def stats_for(self, label: str, context: str) -> ActionOutcomeStats | None:
         contextual = self.table.get(context, {}).get(label)
         if contextual is not None and contextual.trials >= 2:
             return contextual
         return self.table.get("*", {}).get(label) or contextual
+
+    def estimate(
+        self,
+        label: str,
+        context: str,
+        reward_config: RewardConfig | None = None,
+    ) -> ActionEstimate:
+        """Shrink sparse exact actions toward motion and family evidence."""
+        config = reward_config or RewardConfig()
+        sources: list[tuple[ActionOutcomeStats | None, float]] = [
+            (self.hierarchy.get("*", {}).get(action_hierarchy(label)[0]), 4.0),
+            (self.hierarchy.get(context, {}).get(action_hierarchy(label)[0]), 6.0),
+        ]
+        for key in action_hierarchy(label)[1:]:
+            sources.extend(
+                (
+                    (self.hierarchy.get("*", {}).get(key), 8.0),
+                    (self.hierarchy.get(context, {}).get(key), 10.0),
+                )
+            )
+        sources.extend(
+            (
+                (self.table.get("*", {}).get(label), 12.0),
+                (self.table.get(context, {}).get(label), 24.0),
+            )
+        )
+        weighted = 0.0
+        support = 0.0
+        for stats, cap in sources:
+            if stats is None or stats.trials <= 0:
+                continue
+            weight = min(cap, float(stats.trials))
+            weighted += self.empirical_value(stats, config) * weight
+            support += weight
+        family = action_hierarchy(label)[0]
+        population = int(
+            getattr(self.hierarchy.get(context, {}).get(family), "trials", 0)
+            + getattr(self.hierarchy.get("*", {}).get(family), "trials", 0)
+        )
+        return ActionEstimate(
+            utility=weighted / support if support else 0.0,
+            effective_trials=support,
+            population_trials=population,
+        )
+
+    @staticmethod
+    def empirical_value(stats: ActionOutcomeStats, config: RewardConfig) -> float:
+        return empirical_action_value(stats, config)
 
     def adjustment(
         self,
@@ -358,6 +540,10 @@ class ActionOutcomeModel:
             "version": REWARD_VERSION,
             "rounds": asdict(self.rounds),
         }
+        state["__hierarchy__"] = {
+            context: {label: asdict(stats) for label, stats in row.items()}
+            for context, row in self.hierarchy.items()
+        }
         return state
 
     def import_state(self, state: object) -> None:
@@ -376,6 +562,9 @@ class ActionOutcomeModel:
                         }
                     )
                 continue
+            if context == "__hierarchy__":
+                self._import_rows(raw_row, self.hierarchy)
+                continue
             if not isinstance(raw_row, dict):
                 continue
             row = self.table.setdefault(str(context), {})
@@ -392,13 +581,104 @@ class ActionOutcomeModel:
                             else [0] * 8
                         )
                         values[name] += [0] * (8 - len(values[name]))
-                    elif name in {"terminal_win_credit", "terminal_loss_credit"}:
+                    elif name in {
+                        "terminal_win_credit",
+                        "terminal_loss_credit",
+                        "delayed_damage_credit_bp",
+                        "delayed_self_damage_credit_bp",
+                    }:
                         values[name] = float(raw.get(name, 0.0))
                     else:
                         values[name] = int(raw.get(name, 0))
                 stats = ActionOutcomeStats(**values)
                 normalize_legacy_outcome_stats(stats)
                 row[str(label)] = stats
+        if not self.hierarchy:
+            self._rebuild_hierarchy()
+
+    def _import_rows(
+        self, raw_state: object, target: dict[str, dict[str, ActionOutcomeStats]]
+    ) -> None:
+        if not isinstance(raw_state, dict):
+            return
+        for context, raw_row in raw_state.items():
+            if not isinstance(raw_row, dict):
+                continue
+            row = target.setdefault(str(context), {})
+            for label, raw in raw_row.items():
+                if not isinstance(raw, dict):
+                    continue
+                values: dict[str, object] = {}
+                for name in ActionOutcomeStats.__dataclass_fields__:
+                    if name == "self_damage_histogram":
+                        histogram = raw.get(name, [0] * 8)
+                        values[name] = (
+                            [max(0, int(value)) for value in histogram[:8]]
+                            if isinstance(histogram, list)
+                            else [0] * 8
+                        )
+                        values[name] += [0] * (8 - len(values[name]))
+                    elif name in {
+                        "terminal_win_credit",
+                        "terminal_loss_credit",
+                        "delayed_damage_credit_bp",
+                        "delayed_self_damage_credit_bp",
+                    }:
+                        values[name] = float(raw.get(name, 0.0))
+                    else:
+                        values[name] = int(raw.get(name, 0))
+                stats = ActionOutcomeStats(**values)
+                normalize_legacy_outcome_stats(stats)
+                row[str(label)] = stats
+
+    def _rebuild_hierarchy(self) -> None:
+        """One-time backward-compatible migration from exact v4 rows."""
+        for context, row in self.table.items():
+            target = self.hierarchy.setdefault(context, {})
+            for label, stats in row.items():
+                for key in action_hierarchy(label):
+                    aggregate = target.setdefault(key, ActionOutcomeStats())
+                    for name in ActionOutcomeStats.__dataclass_fields__:
+                        value = getattr(stats, name)
+                        if name == "self_damage_histogram":
+                            aggregate.self_damage_histogram = [
+                                left + right
+                                for left, right in zip(
+                                    aggregate.self_damage_histogram, value
+                                )
+                            ]
+                        else:
+                            setattr(aggregate, name, getattr(aggregate, name) + value)
+
+    def metrics(self) -> dict[str, object]:
+        return {
+            "outcomes": self.export_state(),
+            "active": asdict(self.episode) if self.episode else None,
+            "rounds": asdict(self.rounds),
+            "reward_version": REWARD_VERSION,
+        }
+
+
+class OptionOutcomeModel(ActionOutcomeModel):
+    """Longer-horizon outcome model for safe high-level combat options."""
+
+    @staticmethod
+    def empirical_value(stats: ActionOutcomeStats, config: RewardConfig) -> float:
+        trials = max(1, stats.normalized_samples or stats.trials)
+        damage = stats.total_damage_bp / trials
+        self_damage = stats.total_self_damage_bp / trials
+        delayed = stats.delayed_damage_credit_bp / max(1, stats.trials)
+        delayed_self = stats.delayed_self_damage_credit_bp / max(1, stats.trials)
+        terminal = (stats.terminal_win_credit - stats.terminal_loss_credit) / max(
+            1, stats.trials
+        )
+        effect = stats.effectful_trials / max(1, stats.trials)
+        return (
+            config.damage_weight * (damage + 0.65 * delayed)
+            - config.self_damage_weight * (self_damage + 0.65 * delayed_self)
+            + config.terminal_weight_bp * terminal
+            + 0.35 * config.effect_weight_bp * effect
+        )
 
     def metrics(self) -> dict[str, object]:
         return {

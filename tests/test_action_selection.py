@@ -39,6 +39,17 @@ class CoverageExplorerTests(unittest.TestCase):
         second.import_state(first.export_state())
         self.assertEqual(second.selected, first.selected)
         self.assertEqual(second.opportunities, first.opportunities)
+        self.assertEqual(second.scope_decisions, first.scope_decisions)
+
+    def test_exploration_rate_decays_to_nonzero_floor(self) -> None:
+        explorer = CoverageExplorer(seed=4)
+        first = explorer.choose("ctx", {"a": 1.0, "b": 0.0}, exploration_rate=0.08)
+        for _ in range(400):
+            last = explorer.choose(
+                "ctx", {"a": 1.0, "b": 0.0}, exploration_rate=0.08
+            )
+        self.assertLess(last.exploration_rate, first.exploration_rate)
+        self.assertGreaterEqual(last.exploration_rate, 0.015)
 
 
 if __name__ == "__main__":
