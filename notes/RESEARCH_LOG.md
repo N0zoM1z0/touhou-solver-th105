@@ -398,3 +398,17 @@ Additional IDA names/comments: `get_game_config`, `g_game_config`,
   `learning_context`; old rows use conservative native-state/profile inference.
   Replay keeps separate damage, self-damage, spirit, commitment, effect, and
   terminal components and emits a separate artifact before installation.
+- **Observed/fixed (2026-08-07)** scene 5 can remain active while Arcade swaps
+  the P2 fighter. The old shell cached its initial opponent key indefinitely,
+  so later roster stages used and updated the wrong per-opponent models. The
+  battle loop now treats any native P1/P2 vtable change as an encounter
+  boundary before processing the new fighter's first frame. Historical replay
+  routes by each row's copied enemy vtable; 13,655 locally retained rows were
+  repaired, while non-reconstructible contaminated observation models were
+  reset for clean relearning.
+- **Observed/fixed** the generic ranged-startup branch vetoed offense for an
+  entire offensive animation even when native projectile/melee geometry was
+  safe. It now guards only at close range or inside a learned ten-frame threat
+  window. Spirit expenditure extends guard chains only while an actual guard
+  intent and enemy attack are present, rather than mistaking Patchouli's own
+  skill cost for block contact.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -17,6 +18,7 @@ from th105.battle import (
     FRAME_DATA_BOX_VECTOR_B,
     TerminalRoundTracker,
     boxes_world_envelope,
+    combatant_identity_change,
     cold_start_offense_prior,
     local_box_to_world,
     read_frame_box_vector,
@@ -37,6 +39,33 @@ class FakeReader:
 
 
 class BootstrapBattleTests(unittest.TestCase):
+    def test_arcade_opponent_vtable_change_is_an_encounter_boundary(self) -> None:
+        state = SimpleNamespace(
+            p1=SimpleNamespace(vtable=0x006B0EBC),
+            p2=SimpleNamespace(vtable=0x006B0BEC),
+        )
+        self.assertEqual(
+            combatant_identity_change(
+                state,
+                expected_p1_vtable=0x006B0EBC,
+                expected_p2_vtable=0x006B165C,
+            ),
+            "opponent-change-0x006B165C-to-0x006B0BEC",
+        )
+
+    def test_unchanged_fighters_remain_in_the_same_encounter(self) -> None:
+        state = SimpleNamespace(
+            p1=SimpleNamespace(vtable=0x006B0EBC),
+            p2=SimpleNamespace(vtable=0x006B165C),
+        )
+        self.assertIsNone(
+            combatant_identity_change(
+                state,
+                expected_p1_vtable=0x006B0EBC,
+                expected_p2_vtable=0x006B165C,
+            )
+        )
+
     def test_cycle_exercises_movement_guard_and_attacks(self) -> None:
         chords = {frozenset(step.keys) for step in BOOTSTRAP_CYCLE}
         self.assertIn(frozenset({"right"}), chords)
@@ -125,18 +154,10 @@ class BootstrapBattleTests(unittest.TestCase):
         self.assertEqual(round_end_confirm_keys(60), {"x"})
 
     def test_pending_rotation_alternates_dialogue_confirm_and_result_back(self) -> None:
-        self.assertEqual(
-            round_end_confirm_keys(0, rotation_requested=True), {"x"}
-        )
-        self.assertEqual(
-            round_end_confirm_keys(30, rotation_requested=True), {"z"}
-        )
-        self.assertEqual(
-            round_end_confirm_keys(60, rotation_requested=True), {"x"}
-        )
-        self.assertEqual(
-            round_end_confirm_keys(90, rotation_requested=True), {"z"}
-        )
+        self.assertEqual(round_end_confirm_keys(0, rotation_requested=True), {"x"})
+        self.assertEqual(round_end_confirm_keys(30, rotation_requested=True), {"z"})
+        self.assertEqual(round_end_confirm_keys(60, rotation_requested=True), {"x"})
+        self.assertEqual(round_end_confirm_keys(90, rotation_requested=True), {"z"})
 
 
 if __name__ == "__main__":

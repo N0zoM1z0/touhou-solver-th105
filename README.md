@@ -363,6 +363,7 @@ python scripts/replay_th105_corpus.py \
   runtime/th105_transitions.jsonl runtime/th105_transitions.jsonl.*.gz \
   --knowledge runtime/th105_opponent_models.json \
   --self-character 0x006B0EBC \
+  --reset-contaminated-observation-models \
   --output runtime/th105_replayed_models.json
 ```
 
@@ -370,6 +371,10 @@ Inspect the replay manifest and model before atomically installing it as
 `runtime/th105_opponent_models.json`. New rows preserve the runtime's exact v6
 `learning_context`; older action-schema-v4 rows remain reusable with a
 conservative phase reconstruction.
+Replay routes every row by `state.enemy.character_vtable`, not by the cached
+top-level opponent label. This makes historical rows repairable if an older
+Arcade shell survived a roster transition. The optional reset flag clears
+per-frame model families that option transitions cannot reconstruct reliably.
 
 Run a fair four-candidate physical screen with a fixed Lunatic difficulty and
 the same online-learner checkpoint for every candidate:

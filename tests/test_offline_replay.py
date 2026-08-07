@@ -6,7 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from th105.offline_replay import replay_action_label, replay_transitions
+from th105.offline_replay import (
+    native_opponent_key,
+    replay_action_label,
+    replay_transitions,
+)
 
 
 def _record(action: str = "motion-probe:236B") -> dict[str, object]:
@@ -30,6 +34,7 @@ def _record(action: str = "motion-probe:236B") -> dict[str, object]:
                 "pose": 0,
             },
             "enemy": {
+                "character_vtable": "0x006B165C",
                 "x_q4": 70,
                 "y_q4": 0,
                 "action": 310,
@@ -56,6 +61,11 @@ def _record(action: str = "motion-probe:236B") -> dict[str, object]:
 
 
 class OfflineReplayTests(unittest.TestCase):
+    def test_native_row_identity_overrides_stale_shell_opponent(self) -> None:
+        record = _record()
+        record["difficulty"] = "lunatic"
+        self.assertEqual(native_opponent_key(record), "0x006B165C@lunatic")
+
     def test_intent_maps_to_runtime_outcome_label(self) -> None:
         self.assertEqual(
             replay_action_label(_record()),
@@ -71,7 +81,8 @@ class OfflineReplayTests(unittest.TestCase):
         # Duplicate transition IDs are intentionally folded once.
         self.assertEqual(result.offense_samples, 1)
         self.assertEqual(result.option_samples, 1)
-        state = result.opponents["0xENEMY@lunatic"]["offense_outcomes"]
+        self.assertEqual(result.rerouted_transitions, 1)
+        state = result.opponents["0x006B165C@unknown"]["offense_outcomes"]
         exact_contexts = [key for key in state if "|ea=310" in key]
         self.assertEqual(len(exact_contexts), 1)
         row = state[exact_contexts[0]]

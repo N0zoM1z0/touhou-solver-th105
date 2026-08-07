@@ -19,6 +19,19 @@ def _integer(mapping: dict[str, object], name: str, default: int = 0) -> int:
         return default
 
 
+def native_opponent_key(record: dict[str, object]) -> str:
+    """Use the row's copied native fighter vtable, never a stale shell label."""
+    state = _mapping(record.get("state"))
+    enemy = _mapping(state.get("enemy"))
+    raw_vtable = enemy.get("character_vtable")
+    try:
+        vtable = int(str(raw_vtable), 0)
+    except (TypeError, ValueError):
+        return str(record.get("opponent", "unknown"))
+    difficulty = str(record.get("difficulty", "unknown")).casefold()
+    return f"0x{vtable:08X}@{difficulty}"
+
+
 def _action_family(
     action_id: int,
     enemy: dict[str, object],
@@ -72,9 +85,14 @@ def _action_phase(
     return "unknown"
 
 
-def replay_context(record: dict[str, object], profiles: dict[str, object]) -> str:
+def replay_context(
+    record: dict[str, object],
+    profiles: dict[str, object],
+    *,
+    allow_saved: bool = True,
+) -> str:
     saved = record.get("learning_context")
-    if isinstance(saved, str) and "|ef=" in saved:
+    if allow_saved and isinstance(saved, str) and "|ef=" in saved:
         return saved
     state = _mapping(record.get("state"))
     me = _mapping(state.get("self"))
@@ -156,17 +174,17 @@ class ReplayResult:
     transitions_used: int
     offense_samples: int
     option_samples: int
+    rerouted_transitions: int
     opponents: dict[str, dict[str, object]]
 
 
 def replay_transitions(
     records: list[dict[str, object]],
-    knowledge: dict[str, object],
+    _knowledge: dict[str, object],
     *,
     self_character: str,
 ) -> ReplayResult:
     """Build fresh v6 sufficient statistics without changing the raw corpus."""
-    characters = _mapping(knowledge.get("characters"))
     offense_models: dict[str, ActionOutcomeModel] = {}
     option_models: dict[str, OptionOutcomeModel] = {}
     used = offense_samples = option_samples = 0
@@ -189,11 +207,38 @@ def replay_transitions(
             _integer(row, "step"),
         )
     )
+    profile_hints: dict[str, dict[str, dict[str, int]]] = {}
+    rerouted = 0
     for record in filtered:
-        opponent = str(record.get("opponent", "unknown"))
-        entry = _mapping(characters.get(opponent))
-        profiles = _mapping(entry.get("profiles"))
-        context = replay_context(record, profiles)
+        opponent = native_opponent_key(record)
+        rerouted += int(opponent != str(record.get("opponent", "unknown")))
+        state = _mapping(record.get("state"))
+        next_state = _mapping(record.get("next_state"))
+        enemy = _mapping(state.get("enemy"))
+        action_id = _integer(enemy, "action")
+        hint = profile_hints.setdefault(opponent, {}).setdefault(
+            str(action_id),
+            {"active_box_observations": 0, "projectile_samples": 0},
+        )
+        hint["active_box_observations"] += int(_integer(enemy, "attack_box_count") > 0)
+        start_projectiles = state.get("enemy_projectiles")
+        end_projectiles = next_state.get("enemy_projectiles")
+        start_count = (
+            len(start_projectiles) if isinstance(start_projectiles, list) else 0
+        )
+        end_count = len(end_projectiles) if isinstance(end_projectiles, list) else 0
+        hint["projectile_samples"] += int(end_count > start_count)
+
+    for record in filtered:
+        opponent = native_opponent_key(record)
+        offense_models.setdefault(opponent, ActionOutcomeModel())
+        option_models.setdefault(opponent, OptionOutcomeModel())
+        profiles = profile_hints.get(opponent, {})
+        context = replay_context(
+            record,
+            profiles,
+            allow_saved=opponent == str(record.get("opponent", "unknown")),
+        )
         sample = _sample(record)
         label = replay_action_label(record)
         if label is not None:
@@ -229,11 +274,10 @@ def replay_transitions(
         if not isinstance(option, str) or option not in legal_options:
             flush_option()
             continue
-        opponent = str(record.get("opponent", "unknown"))
+        opponent = native_opponent_key(record)
         episode = str(record.get("episode_id", ""))
         key = (opponent, episode, option)
-        entry = _mapping(characters.get(opponent))
-        profiles = _mapping(entry.get("profiles"))
+        profiles = profile_hints.get(opponent, {})
         sample = _sample(record)
         duration = int(sample["commitment"])
         if (
@@ -243,7 +287,11 @@ def replay_transitions(
         ):
             flush_option()
             active_key = key
-            active_context = replay_context(record, profiles)
+            active_context = replay_context(
+                record,
+                profiles,
+                allow_saved=opponent == str(record.get("opponent", "unknown")),
+            )
             active_sample = sample
             continue
         for name in (
@@ -268,6 +316,28 @@ def replay_transitions(
         if sample["terminal"] is not None:
             active_sample["terminal"] = sample["terminal"]
     flush_option()
+
+    # Round summaries are physical outcomes too. Reconstruct them for the
+    # native-routed opponent instead of inheriting contaminated shell totals.
+    for record in filtered:
+        outcome = _mapping(record.get("outcome"))
+        terminal = str(outcome.get("terminal") or "").casefold()
+        if terminal not in {"win", "loss", "draw"}:
+            continue
+        opponent = native_opponent_key(record)
+        next_state = _mapping(record.get("next_state"))
+        me = _mapping(next_state.get("self"))
+        enemy = _mapping(next_state.get("enemy"))
+        for model in (
+            offense_models.setdefault(opponent, ActionOutcomeModel()),
+            option_models.setdefault(opponent, OptionOutcomeModel()),
+        ):
+            model.rounds.rounds += 1
+            model.rounds.wins += int(terminal == "win")
+            model.rounds.losses += int(terminal == "loss")
+            model.rounds.draws += int(terminal == "draw")
+            model.rounds.total_remaining_hp_bp += _integer(me, "hp_bp")
+            model.rounds.total_enemy_remaining_hp_bp += _integer(enemy, "hp_bp")
     opponents: dict[str, dict[str, object]] = {}
     for opponent in sorted(set(offense_models) | set(option_models)):
         opponents[opponent] = {
@@ -283,5 +353,6 @@ def replay_transitions(
         transitions_used=used,
         offense_samples=offense_samples,
         option_samples=option_samples,
+        rerouted_transitions=rerouted,
         opponents=opponents,
     )

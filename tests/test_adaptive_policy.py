@@ -18,11 +18,13 @@ from th105.policies.adaptive import (
     _pattern_has_advancing_attack,
     _native_guard_response,
     _prune_legacy_coverage_scopes,
+    _ranged_startup_requires_guard,
 )
 from th105.motion import generated_attack_probe_hypotheses, generated_motion_hypotheses
 from th105.offense_learning import ActionOutcomeModel
 from th105.battle import BattleState, FighterState
 from th105.policy_api import PolicyObservation
+from th105.opponent_model import ActionAssessment, ActionProfile
 
 
 def _fighter(*, x: float, vtable: int, facing: int) -> FighterState:
@@ -53,6 +55,30 @@ def _fighter(*, x: float, vtable: int, facing: int) -> FighterState:
 
 
 class AdaptiveNativeGeometryTests(unittest.TestCase):
+    def test_far_unknown_startup_no_longer_vetoes_attack(self) -> None:
+        assessment = ActionAssessment(410, 2, "unknown", 30.0, 0.0, 0.0, False)
+        self.assertFalse(
+            _ranged_startup_requires_guard(assessment, None, distance=500.0)
+        )
+        self.assertTrue(
+            _ranged_startup_requires_guard(assessment, None, distance=250.0)
+        )
+
+    def test_learned_imminent_projectile_keeps_short_startup_guard(self) -> None:
+        profile = ActionProfile(
+            410,
+            projectile_samples=4,
+            first_projectile_frame=12.0,
+        )
+        imminent = ActionAssessment(410, 5, "startup", 30.0, 0.0, 1.0, False)
+        passed = ActionAssessment(410, 20, "active", 15.0, 0.0, 1.0, False)
+        self.assertTrue(
+            _ranged_startup_requires_guard(imminent, profile, distance=400.0)
+        )
+        self.assertFalse(
+            _ranged_startup_requires_guard(passed, profile, distance=400.0)
+        )
+
     def test_coverage_migration_drops_full_context_scopes(self) -> None:
         policy = AutonomousAdaptivePolicy()
         explorer = policy.coverage_explorer

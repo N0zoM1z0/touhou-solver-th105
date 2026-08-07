@@ -375,6 +375,38 @@ def _bounded_bandit_score(
     return utility + exploration + bounded_prior
 
 
+def _ranged_startup_requires_guard(
+    assessment: ActionAssessment,
+    profile: object | None,
+    *,
+    distance: float,
+) -> bool:
+    """Guard only a close or physically learned imminent ranged startup.
+
+    Observable projectile/melee geometry is handled by higher-priority native
+    gates. This predicate covers only the short interval before that geometry
+    exists, instead of treating an entire offensive animation as a veto.
+    """
+    if assessment.phase not in {"startup", "active", "unknown"}:
+        return False
+    if distance < 220.0:
+        return True
+    if profile is None:
+        return assessment.phase == "unknown" and distance < 300.0
+
+    def imminent(sample_name: str, frame_name: str, limit: float) -> bool:
+        if int(getattr(profile, sample_name, 0)) <= 0 or distance >= limit:
+            return False
+        until = float(getattr(profile, frame_name, 0.0)) - assessment.elapsed
+        return 0.0 <= until <= 10.0
+
+    if imminent("projectile_samples", "first_projectile_frame", 440.0):
+        return True
+    if imminent("active_box_observations", "first_active_box_frame", 320.0):
+        return True
+    return imminent("impact_samples", "first_impact_frame", 300.0)
+
+
 def _probe_is_empirically_unsafe(model: object, label: str, context: str) -> bool:
     """Stop repeating a probe whose observed trade is clearly losing."""
     stats = getattr(model, "stats_for", lambda *_: None)(label, context)
@@ -1479,6 +1511,8 @@ class AutonomousAdaptivePolicy:
             previous_me is not None
             and me.hp >= previous_me.hp
             and spirit < int(getattr(previous_me, "spirit", spirit))
+            and "guard" in self.previous_intent
+            and enemy_attacking
         ):
             self.guard_chain_until = max(self.guard_chain_until, observation.frame + 20)
             self.counts["guard_contacts"] += 1
@@ -2098,14 +2132,20 @@ class AutonomousAdaptivePolicy:
             self.queue.clear()
             keys = {back} if me.y < 8.0 else {back, "a"}
             intent = "enemy-spell-defend"
-        elif enemy_attacking:
+        elif _ranged_startup_requires_guard(
+            self.last_assessment,
+            self.opponent.profiles.get(enemy.action_id),
+            distance=distance,
+        ):
             # Ranged normals/skills are guarded from startup, before their
-            # projectile object necessarily exists. Geometry takes over on the
-            # first frame a projectile is observable.
+            # projectile object necessarily exists, but only inside a learned
+            # imminent-threat window. Geometry takes over as soon as an object
+            # or melee box is observable.
             self.queue.clear()
             self.combo_confirm_deadline = 0
             keys = {back}
             intent = "ranged-startup-guard"
+            self.counts["ranged_startup_guard_veto"] += 1
         elif self.queue:
             self._decision_legal_actions = self.queue_legal_actions
             self._decision_probability = self.queue_behavior_probability

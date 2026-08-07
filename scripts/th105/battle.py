@@ -459,6 +459,17 @@ def run_bootstrap_fight(
     return {"cycles": cycles, "seconds": seconds, "stop_reason": reason}
 
 
+def combatant_identity_change(
+    state: BattleState, *, expected_p1_vtable: int, expected_p2_vtable: int
+) -> str | None:
+    """Return a safe encounter boundary when Arcade swaps either fighter."""
+    if int(state.p1.vtable) != int(expected_p1_vtable):
+        return f"p1-change-0x{expected_p1_vtable:08X}-to-0x{state.p1.vtable:08X}"
+    if int(state.p2.vtable) != int(expected_p2_vtable):
+        return f"opponent-change-0x{expected_p2_vtable:08X}-to-0x{state.p2.vtable:08X}"
+    return None
+
+
 def run_adaptive_fight(
     reader: ProcessReader,
     keyboard: BattleKeyboard,
@@ -487,6 +498,8 @@ def run_adaptive_fight(
     if playstyle not in {"defensive", "balanced", "aggressive"}:
         raise ValueError(f"unknown playstyle: {playstyle}")
     state = read_battle_state(reader)
+    encounter_p1_vtable = state.p1.vtable
+    encounter_p2_vtable = state.p2.vtable
     terminal_tracker = terminal_tracker or TerminalRoundTracker()
     initial = battle_state_json(state)
     deadline = time.perf_counter() + seconds
@@ -509,6 +522,7 @@ def run_adaptive_fight(
         policy_path or Path(__file__).with_name("policies") / "adaptive.py"
     )
     reason = "duration"
+    identity_changed = False
     knowledge_path = (
         telemetry_path.with_name("th105_opponent_models.json")
         if telemetry_path is not None
@@ -764,6 +778,18 @@ def run_adaptive_fight(
             # checkpointed instead of escaping to the outer recovery loop.
             reason = "battle-state-transition"
             break
+        identity_boundary = combatant_identity_change(
+            state,
+            expected_p1_vtable=encounter_p1_vtable,
+            expected_p2_vtable=encounter_p2_vtable,
+        )
+        if identity_boundary is not None:
+            # Scene 5 persists across some Arcade roster transitions. Do not
+            # let a new fighter contribute one frame to the old opponent's
+            # model or close its active transition against unrelated HP.
+            reason = identity_boundary
+            identity_changed = True
+            break
         me, enemy = state.p1, state.p2
         if me.hp <= 0 or enemy.hp <= 0:
             if not terminal_reported:
@@ -993,7 +1019,11 @@ def run_adaptive_fight(
     if transition_recorder is not None:
         transition_recorder.finish_truncated(
             frame=frames,
-            state=state if scene_id(reader) == SCENE_BATTLE else None,
+            state=(
+                state
+                if scene_id(reader) == SCENE_BATTLE and not identity_changed
+                else None
+            ),
         )
     final = None
     if scene_id(reader) == SCENE_BATTLE:

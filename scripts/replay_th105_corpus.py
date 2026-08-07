@@ -58,6 +58,14 @@ def main() -> int:
     parser.add_argument(
         "--output", type=Path, default=Path("runtime/th105_replayed_models.json")
     )
+    parser.add_argument(
+        "--reset-contaminated-observation-models",
+        action="store_true",
+        help=(
+            "clear opponent timing/projectile/defense/geometry/cancel/coverage "
+            "rows that cannot be reconstructed from option transitions"
+        ),
+    )
     args = parser.parse_args()
     knowledge = load_knowledge(args.knowledge)
     records = _records(args.inputs)
@@ -67,6 +75,16 @@ def main() -> int:
     for opponent, models in result.opponents.items():
         raw_entry = characters.get(opponent, {})
         entry = dict(raw_entry) if isinstance(raw_entry, dict) else {}
+        if args.reset_contaminated_observation_models:
+            for field in (
+                "profiles",
+                "projectile_envelopes",
+                "defense_responses",
+                "attack_geometry",
+                "cancel_graph",
+                "coverage_explorer",
+            ):
+                entry[field] = {}
         entry.update(models)
         entry["offline_replay_updated_at"] = time.time()
         characters[opponent] = entry
@@ -78,6 +96,10 @@ def main() -> int:
         "transitions_used": result.transitions_used,
         "offense_samples": result.offense_samples,
         "option_samples": result.option_samples,
+        "rerouted_transitions": result.rerouted_transitions,
+        "reset_contaminated_observation_models": bool(
+            args.reset_contaminated_observation_models
+        ),
         "opponents": len(result.opponents),
         "source_files": [str(path) for path in args.inputs],
         "generated_at": time.time(),

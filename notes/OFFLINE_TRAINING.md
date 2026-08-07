@@ -157,6 +157,10 @@ deduplicates transition IDs, maps generic motion/cancel intents back to runtime
 labels, groups consecutive micro intents into bounded option segments, and
 emits a separate knowledge artifact for inspection. This is a weight rebuild,
 not corpus mutation and not reward-dependent Q training.
+The row-native enemy character vtable is authoritative for opponent routing.
+`--reset-contaminated-observation-models` additionally removes temporal,
+projectile, defense, geometry, cancel, and coverage rows that cannot be
+faithfully reconstructed from an option-granularity corpus.
 
 `scripts/train_th105_cpu.py` implements the multi-head boosted-tree baseline and
 distills an algorithm-neutral `distilled_policy.json`. Its categorical action,

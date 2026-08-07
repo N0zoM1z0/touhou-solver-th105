@@ -80,7 +80,9 @@ cannot recover.
 - `scripts/replay_th105_corpus.py` regenerates these compact online outcome
   priors from physical transition shards. It learns vector outcome components,
   never baked gameplay reward weights. Old v4 rows without `learning_context`
-  use conservative phase inference; source rows are never rewritten.
+  use conservative phase inference; source rows are never rewritten. Routing
+  uses each row's copied native enemy vtable rather than the shell's cached
+  opponent label, so stale-label Arcade data can be repaired offline.
 
 ## Future offline training
 
